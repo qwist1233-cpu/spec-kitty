@@ -130,10 +130,9 @@ def test_real_bridge_walk_publishes_all_six_runtime_moments_with_journal_identit
 
     for call in published:
         envelope = call["envelope"]
+        assert envelope["payload"]["mission_slug"] == SLUG, "the producer stamps mission identity (S11)"
         matches = [
-            record
-            for record in journal
-            if record["event_type"] == envelope["event_type"] and record["payload"] == envelope["payload"]
+            record for record in journal if record["event_type"] == envelope["event_type"] and {**record["payload"], "mission_slug": SLUG} == envelope["payload"]
         ]
         assert matches, f"published {envelope['event_type']} has no canonical journal record"
         assert envelope["timestamp"] in {record["timestamp"] for record in matches}, "occurrence time comes from the journal"
