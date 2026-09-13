@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Post-4.0.0rc1 cycle. Entries land here until the next release chore opens a
 versioned candidate section._
+### Added
+
+- **`spec-kitty next` publishes the six runtime moments to the team's Zeitgeist relay** (#3929): mission run started/completed, step issued/auto-completed, and decision input requested/answered. A producer registered at the runtime emitter seam publishes each transition the runtime journals through the existing bounded lifecycle fan-out, under the journal record's own timestamp and an `event_id` derived from that record, so a re-emitted transition is the same moment. Decision question, option and answer text stay out of moment attrs, and relay or credential failures never change local runtime state.
 
 ### Fixed
 
