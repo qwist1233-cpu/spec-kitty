@@ -91,57 +91,66 @@ For non-obvious runtime behaviour an operator may encounter:
 │                                                        checkout for a        │
 │                                                        single-branch         │
 │                                                        mission.              │
-│ --merge-commit                                   SHA   With --mode pr: record │
-│                                                        this PR merge commit │
-│                                                        as the mission's     │
-│                                                        post-merge review    │
-│                                                        baseline. The commit │
-│                                                        is verified against  │
-│                                                        git (it must carry   │
-│                                                        kitty-specs/<slug>/m │
-│                                                        eta.json, its first  │
-│                                                        parent must not, and │
-│                                                        it must have landed  │
-│                                                        on the target        │
-│                                                        branch) before       │
-│                                                        anything is          │
-│                                                        written. A           │
-│                                                        single-parent landing │
-│                                                        (squash or            │
-│                                                        corpus-first stack)  │
-│                                                        additionally needs   │
+│ --merge-commit                                   SHA   With --mode pr:       │
+│                                                        record this PR merge  │
+│                                                        commit as the         │
+│                                                        mission's post-merge  │
+│                                                        review baseline. The  │
+│                                                        commit is verified    │
+│                                                        against git before    │
+│                                                        anything is written — │
+│                                                        it must carry         │
+│                                                        kitty-specs/<slug>/m… │
+│                                                        its first parent must │
+│                                                        not, and it must have │
+│                                                        landed on the target  │
+│                                                        branch. Every landing │
+│                                                        shape additionally    │
+│                                                        needs                 │
 │                                                        --attest-first-landi… │
-│ --target-branch                                 NAME  With --merge-commit:  │
-│                                                        the branch the PR    │
-│                                                        merged into (the     │
-│                                                        PR's base branch).   │
-│                                                        Defaults to the      │
-│                                                        mission's declared   │
-│                                                        target_branch, else  │
-│                                                        the repository's     │
-│                                                        primary branch.     │
-│ --attest-first-land…                                   With --merge-commit   │
-│                                                        on a single-parent    │
-│                                                        landing (squash or    │
-│                                                        corpus-first stack):  │
+│ --target-branch                                  TEXT  With --merge-commit:  │
+│                                                        the branch the PR     │
+│                                                        merged into (the PR's │
+│                                                        base branch).         │
+│                                                        Defaults to the       │
+│                                                        mission's declared    │
+│                                                        target_branch, else   │
+│                                                        the repository's      │
+│                                                        primary branch.       │
+│ --attest-first-land…                                   With --merge-commit:  │
 │                                                        attest that the       │
-│                                                        supplied commit was   │
-│                                                        the first commit of   │
-│                                                        the landing, so its   │
+│                                                        supplied commit's     │
 │                                                        first parent is the   │
 │                                                        pre-landing target    │
-│                                                        tip. Without it a     │
-│                                                        single-parent landing │
-│                                                        commit is refused —   │
-│                                                        git cannot prove its │
-│                                                        parent is the         │
-│                                                        pre-landing tip, and  │
-│                                                        a wrong anchor        │
-│                                                        silently under-scans  │
-│                                                        the dead-code gate. A │
+│                                                        tip — for a           │
 │                                                        two-parent merge      │
-│                                                        commit needs no       │
-│                                                        attestation.          │
+│                                                        commit, that the      │
+│                                                        merge was performed   │
+│                                                        ON the target branch  │
+│                                                        (an internal merge    │
+│                                                        fast-forwarded onto   │
+│                                                        the target is         │
+│                                                        graph-identical, and  │
+│                                                        its first parent is   │
+│                                                        an implementation     │
+│                                                        commit); for a        │
+│                                                        single-parent landing │
+│                                                        (squash or            │
+│                                                        corpus-first stack),  │
+│                                                        that it was the first │
+│                                                        commit of the         │
+│                                                        landing. Required for │
+│                                                        every landing shape:  │
+│                                                        git cannot prove      │
+│                                                        either, and a wrong   │
+│                                                        anchor silently       │
+│                                                        under-scans the       │
+│                                                        dead-code gate. The   │
+│                                                        attestation is        │
+│                                                        recorded in           │
+│                                                        pr_merge_evidence,    │
+│                                                        never presented as a  │
+│                                                        git proof.            │
 │ --help                -h                               Show this message and │
 │                                                        exit.                 │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -311,6 +320,11 @@ _Charter management commands_
 │               optional cascade.                                              │
 │ deactivate    Deactivate a doctrine artifact by kind and ID (FR-005), with   │
 │               optional cascade.                                              │
+│ new           Scaffold a stub doctrine artifact YAML (FR-016).               │
+│ validate      Validate project-layer doctrine artifacts against their        │
+│               schemas (FR-017).                                              │
+│ fetch         Fetch org doctrine pack(s) from their configured remote        │
+│               sources.                                                       │
 │ interview     Capture charter interview answers for later generation.        │
 │ generate      Generate charter bundle from interview answers + doctrine      │
 │               references.                                                    │
@@ -327,142 +341,7 @@ _Charter management commands_
 │ mission-type  Mission type commands (activated types only).                  │
 │ list          List activated doctrine artifacts by kind.                     │
 │ pack          Charter pack management commands.                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
-```
-
-## spec-kitty charter fetch
-
-```
- Usage: spec-kitty charter fetch [OPTIONS]
-
- Fetch org doctrine pack(s) from their configured remote sources.
-
-╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ --pack             TEXT  Fetch only the named pack (default: fetch all       │
-│                          configured packs).                                  │
-│ --dry-run                Show what would be fetched without contacting any   │
-│                          remote.                                             │
-│ --help     -h            Show this message and exit.                         │
-╰──────────────────────────────────────────────────────────────────────────────╯
-```
-
-## spec-kitty charter new
-
-```
- Usage: spec-kitty charter new [OPTIONS] KIND ID
-
- Scaffold a stub doctrine artifact YAML (FR-016).
-
- The scaffolder pre-fills the canonical schema's required fields with
- ``TODO …`` placeholders so the file passes ``doctrine validate`` on
- first emit.  Refuses to overwrite an existing file.
-
-╭─ Arguments ──────────────────────────────────────────────────────────────────╮
-│ *    kind             TEXT  Artifact kind (singular): one of agent_profile,  │
-│                             asset, directive, mission_step_contract,         │
-│                             paradigm, procedure, styleguide, tactic,         │
-│                             toolguide.                                       │
-│                             [required]                                       │
-│ *    artifact_id      ID    Artifact identifier (kebab-case for most kinds;  │
-│                             SCREAMING_SNAKE for directives).                 │
-│                             [required]                                       │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ --pack          PATH  Scaffold inside a doctrine pack directory instead of   │
-│                       the project layer. When omitted, the stub lands under  │
-│                       .kittify/doctrine/.                                    │
-│ --help  -h            Show this message and exit.                            │
-╰──────────────────────────────────────────────────────────────────────────────╯
-```
-
-## spec-kitty charter org
-
-_Manage org-layer doctrine pack authoring (init, validate)._
-
-```
- Usage: spec-kitty charter org [OPTIONS] COMMAND [ARGS]...
-
- Manage org-layer doctrine pack authoring (init, validate).
-
-╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ --help  -h        Show this message and exit.                                │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭─ Commands ───────────────────────────────────────────────────────────────────╮
-│ init      Scaffold a minimal org doctrine pack skeleton (FR-006).            │
-│ validate  Validate an org doctrine pack using schema and DRG checks          │
-│           (FR-006).                                                          │
-╰──────────────────────────────────────────────────────────────────────────────╯
-```
-
-## spec-kitty charter org init
-
-```
- Usage: spec-kitty charter org init [OPTIONS] PACK_PATH
-
- Scaffold a minimal org doctrine pack skeleton (FR-006).
-
- Creates three files under *pack-path*::
-
-     org-charter.yaml   — governance policy stub
-     drg/fragment.yaml  — DRG extension stub (with pydantic_model: frontmatter)
-     README.md          — authoring quickstart
-
- Refuses to overwrite an existing directory unless ``--force`` is passed.
-
-╭─ Arguments ──────────────────────────────────────────────────────────────────╮
-│ *    pack_path      PATH  Path to the directory to initialise as an org      │
-│                           doctrine pack.                                     │
-│                           [required]                                         │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ --force            Overwrite an existing pack directory.                     │
-│ --help   -h        Show this message and exit.                               │
-╰──────────────────────────────────────────────────────────────────────────────╯
-```
-
-## spec-kitty charter org validate
-
-```
- Usage: spec-kitty charter org validate [OPTIONS] PACK_PATH
-
- Validate an org doctrine pack using schema and DRG checks (FR-006).
-
- Calls the WP06 :func:`specify_cli.doctrine.pack_validator.validate_pack`
- loader.  Prints per-file findings with file paths.  Exits non-zero when
- at least one error is found.
-
-╭─ Arguments ──────────────────────────────────────────────────────────────────╮
-│ *    pack_path      PATH  Path to the org doctrine pack directory to         │
-│                           validate.                                          │
-│                           [required]                                         │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ --help  -h        Show this message and exit.                                │
-╰──────────────────────────────────────────────────────────────────────────────╯
-```
-
-## spec-kitty charter validate
-
-```
- Usage: spec-kitty charter validate [OPTIONS] PATH
-
- Validate project-layer doctrine artifacts against their schemas (FR-017).
-
- When *path* is a single file, validates that file.  When *path* is a
- directory, walks the tree for ``*.yaml`` files whose filename suffix
- matches a canonical artifact kind and validates each one.
-
- Exit code: ``0`` if every artifact validates; ``1`` if any artifact
- fails.  A per-file error report is printed for failures.
-
-╭─ Arguments ──────────────────────────────────────────────────────────────────╮
-│ *    path      PATH  Artifact YAML file or a directory containing            │
-│                      project-layer doctrine artifacts (recurses into         │
-│                      per-kind subdirectories).                               │
-│                      [required]                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ --help  -h        Show this message and exit.                                │
+│ org           Manage org-layer doctrine pack authoring (init, validate).     │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -623,6 +502,22 @@ _Charter bundle validation commands._
 │                                                (NFR-001).                    │
 │                                                [default: no-resynthesize]    │
 │ --help          -h                             Show this message and exit.   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+## spec-kitty charter fetch
+
+```
+ Usage: spec-kitty charter fetch [OPTIONS]
+
+ Fetch org doctrine pack(s) from their configured remote sources.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --pack             TEXT  Fetch only the named pack (default: fetch all       │
+│                          configured packs).                                  │
+│ --dry-run                Show what would be fetched without contacting any   │
+│                          remote.                                             │
+│ --help     -h            Show this message and exit.                         │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -787,6 +682,104 @@ _Mission type commands (activated types only)._
 │                               mission-type list` (CR-02, mission             │
 │                               charter-code-topology-01M152G1 S4).            │
 │ --help              -h        Show this message and exit.                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+## spec-kitty charter new
+
+```
+ Usage: spec-kitty charter new [OPTIONS] KIND ID
+
+ Scaffold a stub doctrine artifact YAML (FR-016).
+
+ The scaffolder pre-fills the canonical schema's required fields with
+ ``TODO …`` placeholders so the file passes ``doctrine validate`` on
+ first emit.  Refuses to overwrite an existing file.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    kind             TEXT  Artifact kind (singular): one of agent_profile,  │
+│                             asset, directive, mission_step_contract,         │
+│                             paradigm, procedure, styleguide, tactic,         │
+│                             toolguide.                                       │
+│                             [required]                                       │
+│ *    artifact_id      ID    Artifact identifier (kebab-case for most kinds;  │
+│                             SCREAMING_SNAKE for directives).                 │
+│                             [required]                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --pack          PATH  Scaffold inside a doctrine pack directory instead of   │
+│                       the project layer. When omitted, the stub lands under  │
+│                       .kittify/doctrine/.                                    │
+│ --help  -h            Show this message and exit.                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+## spec-kitty charter org
+
+_Manage org-layer doctrine pack authoring (init, validate)._
+
+```
+ Usage: spec-kitty charter org [OPTIONS] COMMAND [ARGS]...
+
+ Manage org-layer doctrine pack authoring (init, validate).
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help  -h        Show this message and exit.                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ init      Scaffold a minimal org doctrine pack skeleton (FR-006).            │
+│ validate  Validate an org doctrine pack using schema and DRG checks          │
+│           (FR-006).                                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+## spec-kitty charter org init
+
+```
+ Usage: spec-kitty charter org init [OPTIONS] PACK_PATH
+
+ Scaffold a minimal org doctrine pack skeleton (FR-006).
+
+ Creates three files under *pack-path*::
+
+     org-charter.yaml   — governance policy stub
+     drg/fragment.yaml  — DRG extension stub (with pydantic_model: frontmatter)
+     README.md          — authoring quickstart
+
+ Refuses to overwrite an existing directory unless ``--force`` is passed.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    pack_path      PATH  Path to the directory to initialise as an org      │
+│                           doctrine pack.                                     │
+│                           [required]                                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --force            Overwrite an existing pack directory.                     │
+│ --help   -h        Show this message and exit.                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+## spec-kitty charter org validate
+
+```
+ Usage: spec-kitty charter org validate [OPTIONS] PACK_PATH
+
+ Validate an org doctrine pack using schema and DRG checks (FR-006).
+
+ Calls the WP06 :func:`specify_cli.doctrine.pack_validator.validate_pack`
+ loader.  Prints per-file findings with file paths.  Exits non-zero when
+ at least one error is found.
+
+ Org fragments use id and plural kind (for example, directives) for nodes.
+ Validation uses the runtime loader, which supplies pack provenance fields.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    pack_path      PATH  Path to the org doctrine pack directory to         │
+│                           validate.                                          │
+│                           [required]                                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help  -h        Show this message and exit.                                │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -1086,6 +1079,31 @@ _Charter pack management commands._
 │ --dry-run-evidence                  Print evidence summary and exit without  │
 │                                     running synthesis.                       │
 │ --help                -h            Show this message and exit.              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+## spec-kitty charter validate
+
+```
+ Usage: spec-kitty charter validate [OPTIONS] PATH
+
+ Validate project-layer doctrine artifacts against their schemas (FR-017).
+
+ When *path* is a single file, validates that file.  When *path* is a
+ directory, walks the tree for ``*.yaml`` files whose filename suffix
+ matches a canonical artifact kind and validates each one.
+
+ Exit code: ``0`` if every artifact validates; ``1`` if any artifact
+ fails.  A per-file error report is printed for failures.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    path      PATH  Artifact YAML file or a directory containing            │
+│                      project-layer doctrine artifacts (recurses into         │
+│                      per-kind subdirectories).                               │
+│                      [required]                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help  -h        Show this message and exit.                                │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -2160,6 +2178,9 @@ _Manage org-layer doctrine pack authoring (init, validate)._
  loader.  Prints per-file findings with file paths.  Exits non-zero when
  at least one error is found.
 
+ Org fragments use id and plural kind (for example, directives) for nodes.
+ Validation uses the runtime loader, which supplies pack provenance fields.
+
 ╭─ Arguments ──────────────────────────────────────────────────────────────────╮
 │ *    pack_path      PATH  Path to the org doctrine pack directory to         │
 │                           validate.                                          │
@@ -2906,9 +2927,7 @@ _Migration commands: update .kittify/ layout and backfill identity fields in leg
 │ backfill-identity          Write a ULID mission_id into any meta.json that   │
 │                            lacks one.                                        │
 │ backfill-merge-commit      Record a GitHub PR's real merge commit as a       │
-│                            mission's post-merge review baseline (#4231).     │
-│                            Verifies the commit against git before writing;   │
-│                            idempotent.                                       │
+│                            mission's review baseline (#4231).                │
 │ backfill-topology          Persist each legacy mission's MissionTopology     │
 │                            into its meta.json.                               │
 │ backfill-mission-type      Mint a profile-resolving ``mission_type`` into    │
@@ -2998,17 +3017,24 @@ _Migration commands: update .kittify/ layout and backfill identity fields in leg
  written through the same canonical seam ``spec-kitty merge`` and
  ``accept --mode pr --merge-commit`` use.
 
- **What the anchor proves depends on the landing shape.** A two-parent
- merge commit's first parent is the pre-landing target tip by
- construction (``pr_merge_evidence: merge-commit-parent`` — proven from
- git). A single-parent landing commit (squash, or a corpus-first stack)
- is accepted only with ``--attest-first-landing-commit`` — your explicit
- attestation that it was the first commit of the landing
- (``pr_merge_evidence: corpus-parent-attested``) — because git cannot
- prove its parent is the pre-landing tip: a landing whose implementation
- commits preceded the corpus has an earlier same-PR commit there,
- graph-identical to pre-existing target work, and anchoring there would
- silently under-scan the dead-code gate.
+ **What the anchor proves depends on the landing shape — and on your
+ attestation, never on git.** Checks 1–6 prove the commit landed on the
+ target branch and introduced the mission corpus; they cannot prove its
+ first parent is the PRE-LANDING TARGET TIP for any shape. A two-parent
+ merge commit's first parent is the tip only if the merge was performed
+ on the target branch — an internal merge (the corpus branch merged into
+ the implementation branch, the target then fast-forwarded to the
+ result) is graph-identical and its first parent is an implementation
+ commit. A single-parent landing commit (squash, or a corpus-first stack)
+ has the tip as its parent only if it was the first commit of the
+ landing. Both shapes therefore require ``--attest-first-landing-commit``
+ — your explicit attestation — and record it as the anchor's evidence
+ class (``pr_merge_evidence: merge-commit-parent-attested`` /
+ ``corpus-parent-attested``), so the anchor's completeness rests on a
+ recorded operator attestation, never on a claim git did not make.
+ Anchoring at the wrong tip would silently under-scan the dead-code
+ gate. Full forge commit-list evidence, which would prove the tip
+ outright, is tracked in #4277.
 
  **Idempotent**: a mission whose ``meta.json`` already carries a
  ``baseline_merge_commit`` is skipped and never overwritten.
@@ -3021,53 +3047,75 @@ _Migration commands: update .kittify/ layout and backfill identity fields in leg
 
  Examples:
 
-     spec-kitty migrate backfill-merge-commit --mission 321-mission --merge-commit <sha> --dry-run
+     spec-kitty migrate backfill-merge-commit --mission 321-mission
+ --merge-commit <sha> --dry-run
 
-     spec-kitty migrate backfill-merge-commit --mission 321-mission --merge-commit <sha>
+     spec-kitty migrate backfill-merge-commit --mission 321-mission
+ --merge-commit <sha>
 
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ *  --mission               HANDLE  Mission to repair (mission_id / mid8 /    │
-│                                    slug).                                    │
-│                                    [required]                                │
-│ *  --merge-commit          SHA     The PR merge commit that landed the       │
-│                                    mission on its target branch. Read it off │
-│                                    the merged PR, then supply it here; the   │
-│                                    migration verifies it against git before  │
-│                                    writing anything — it must carry the      │
-│                                    mission's kitty-specs/<slug>/meta.json,   │
-│                                    its first parent must not, and it must    │
-│                                    have landed on the target branch. A       │
-│                                    single-parent landing (squash or          │
-│                                    corpus-first stack) additionally needs    │
-│                                    --attest-first-landing-commit.            │
-│                                    [required]                                │
-│    --target-branch         NAME    The branch the PR merged into (the PR's   │
-│                                    base branch), for the landing check.      │
-│                                    Defaults to the mission's declared        │
-│                                    target_branch, else the repository's      │
-│                                    primary branch.                           │
-│    --attest-first-landi…           Attest that the supplied --merge-commit   │
-│                                    was the FIRST commit of the landing (a   │
-│                                    squash, or a corpus-first stack), so its  │
-│                                    first parent is the pre-landing target    │
-│                                    tip. Required for any single-parent       │
-│                                    landing commit: git cannot prove its      │
-│                                    parent is the pre-landing tip — a landing │
-│                                    whose implementation commits preceded     │
-│                                    the corpus has an earlier same-PR commit  │
-│                                    there, graph-identical to pre-existing    │
-│                                    target work — and a wrong anchor silently │
-│                                    under-scans the dead-code gate. A         │
-│                                    two-parent merge commit needs no          │
-│                                    attestation; its parent is proven from    │
-│                                    git.                                      │
-│    --dry-run                       Verify the merge evidence and report what │
-│                                    would be written without writing any      │
-│                                    files. The JSON shape is identical to a   │
-│                                    live run.                                 │
-│    --json                          Emit the per-mission backfill result row  │
-│                                    as structured JSON.                       │
-│    --help          -h              Show this message and exit.               │
+│ *  --mission                            HANDLE  Mission to repair            │
+│                                                 (mission_id / mid8 / slug).  │
+│                                                 [required]                   │
+│ *  --merge-commit                       SHA     The PR merge commit that     │
+│                                                 landed the mission on its    │
+│                                                 target branch. Read it off   │
+│                                                 the merged PR, then supply   │
+│                                                 it here; the migration       │
+│                                                 verifies it against git      │
+│                                                 before writing anything — it │
+│                                                 must carry the mission's     │
+│                                                 kitty-specs/<slug>/meta.jso… │
+│                                                 its first parent must not,   │
+│                                                 and it must have landed on   │
+│                                                 the target branch. Every     │
+│                                                 landing shape additionally   │
+│                                                 needs                        │
+│                                                 --attest-first-landing-comm… │
+│                                                 [required]                   │
+│    --target-branch                      TEXT    The branch the PR merged     │
+│                                                 into (the PR's base branch), │
+│                                                 for the landing check.       │
+│                                                 Defaults to the mission's    │
+│                                                 declared target_branch, else │
+│                                                 the repository's primary     │
+│                                                 branch.                      │
+│    --attest-first-landing-com…                  Attest that the supplied     │
+│                                                 --merge-commit's first       │
+│                                                 parent is the pre-landing    │
+│                                                 target tip. Required for     │
+│                                                 every landing shape: for a   │
+│                                                 two-parent merge commit,     │
+│                                                 attest the merge was         │
+│                                                 performed ON the target      │
+│                                                 branch (a merge performed on │
+│                                                 a mission or sibling branch  │
+│                                                 and then fast-forwarded onto │
+│                                                 the target is                │
+│                                                 graph-identical, and its     │
+│                                                 first parent is an           │
+│                                                 implementation commit, not   │
+│                                                 the tip); for a              │
+│                                                 single-parent landing        │
+│                                                 (squash or corpus-first      │
+│                                                 stack), attest the supplied  │
+│                                                 commit was the FIRST commit  │
+│                                                 of the landing. Git cannot   │
+│                                                 prove either — and a wrong   │
+│                                                 anchor silently under-scans  │
+│                                                 the dead-code gate. The      │
+│                                                 attestation is recorded in   │
+│                                                 pr_merge_evidence, never     │
+│                                                 presented as a git proof.    │
+│    --dry-run                                    Verify the merge evidence    │
+│                                                 and report what would be     │
+│                                                 written without writing any  │
+│                                                 files. The JSON shape is     │
+│                                                 identical to a live run.     │
+│    --json                                       Emit the per-mission         │
+│                                                 backfill result row as       │
+│                                                 structured JSON.             │
+│    --help                       -h              Show this message and exit.  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -3197,7 +3245,11 @@ _Migration commands: update .kittify/ layout and backfill identity fields in leg
  Per-mission best-effort (research D-03): a mission whose verify fails is left
  un-flipped (``status_phase`` untouched) and named in the summary; other
  missions
- still flip. Use ``--dry-run`` to preview would-seed counts without writing.
+ still flip. Use ``--dry-run`` to preview would-seed and would-flip counts
+ without writing. The summary's ``Flipped`` counter names the missions this
+ run actually flipped — a mission with event-log evidence but no legacy
+ frontmatter state to seed still flips and is counted there, never as
+ "Skipped (already migrated)" (#3212).
 
  Exit codes:
 
@@ -5599,6 +5651,7 @@ _Tracker synchronization commands_
 │ --target                TEXT  Target version (defaults to current CLI        │
 │                               version)                                       │
 │ --json                        Output results as JSON                         │
+│ --plan-json                   Output the complete preview plan as JSON       │
 │ --verbose       -v            Show detailed migration information            │
 │ --no-worktrees                Skip upgrading worktrees                       │
 │ --cli                         Restrict to CLI guidance only; works outside   │
@@ -5608,7 +5661,7 @@ _Tracker synchronization commands_
 │ --yes           -y            Non-interactive confirmation; alias for        │
 │                               --force (FR-017)                               │
 │ --no-nag                      Suppress upgrade-nag output explicitly         │
-│ --help          -h            Show this message and exit.                    │
+│ --help                        Show this message and exit.                    │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
