@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 _4.0.0rc3 candidate cycle. Entries land here until the release chore finalizes
 this section at publish._
 
+### Changed
+
+- **The release runbook now opens the next development cycle right after every tag** (#4314). `RELEASE_CHECKLIST.md` gains Release Process step 8, "Open the Next Development Cycle", mirrored in the Release Process summary in `docs/development/contributing.md`. Branch-mode release validation requires `main`'s version to advance beyond the latest tag, so the scheduled Release Readiness Check went red after `v4.0.0rc1` and again after `v4.0.0rc2` until the next cycle opened (#4290, fixed for rc3 by #4313). The step lists the edits that open a cycle — the next version in `pyproject.toml`, the project entry in `uv.lock` and `.kittify/metadata.yaml`, and a new `## [Unreleased] - <next version>` heading — and a release test now pins it in both documents.
+
 ## [4.0.0rc2] - 2026-09-14
 
 Second public release candidate for the Team Kitty 4.x line, cut from `main` for
