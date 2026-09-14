@@ -61,14 +61,16 @@ def _git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _create_pr_merged_feature(repo_root: Path, *, merged: bool = True) -> tuple[Path, str, str]:
+def _create_pr_merged_feature(repo_root: Path, *, merged: bool = True, squash: bool = False) -> tuple[Path, str, str]:
     """Create an accept-ready mission whose PR already merged into main.
 
     Returns ``(feature_dir, merge_commit, pre_merge_parent)``. The base
     commit on main predates ``kitty-specs/`` entirely; the mission branch
     carries the corpus; a ``--no-ff`` merge lands it on main (the PR-shaped
     merge commit); accept then runs on the mission branch, as it does in the
-    elements-first programme.
+    elements-first programme. With ``squash=True`` the landing is a
+    single-parent squash commit instead — the shape that needs the
+    operator's ``--attest-first-landing-commit`` attestation.
 
     With ``merged=False`` the branch is NEVER merged and the returned
     "merge commit" is the single corpus commit on the unmerged branch — the
@@ -210,7 +212,12 @@ def _create_pr_merged_feature(repo_root: Path, *, merged: bool = True) -> tuple[
 
     # The PR-shaped landing on main: first parent predates the corpus.
     _git(repo_root, "checkout", "main")
-    if merged:
+    if merged and squash:
+        _git(repo_root, "merge", "--squash", "-q", _MISSION_BRANCH)
+        _git(repo_root, "commit", "-m", f"Squash PR: land {_SLUG}")
+        merge_commit = _git(repo_root, "rev-parse", "HEAD").stdout.strip()
+        pre_merge_parent = _git(repo_root, "rev-parse", "HEAD^1").stdout.strip()
+    elif merged:
         _git(
             repo_root,
             "merge",
@@ -267,6 +274,7 @@ def test_accept_pr_mode_records_verified_merge_as_baseline(tmp_path: Path, monke
         f"baseline must be the merge commit's first parent (the pre-landing target tip), not the merge commit itself: {meta}"
     )
     assert meta["pr_merge_commit"] == merge_commit
+    assert meta["pr_merge_evidence"] == "merge-commit-parent"
     assert meta["acceptance_mode"] == "pr"
 
     # The recording is swept into the residual finalize commit: clean tree.
@@ -388,3 +396,58 @@ def test_accept_unmerged_specify_commit_fails_clean(tmp_path: Path, monkeypatch:
     meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
     assert "baseline_merge_commit" not in meta
     assert "pr_merge_commit" not in meta
+
+
+def test_accept_single_parent_landing_needs_attestation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A squash landing is single-parent: attested, never presented as proven.
+
+    The squash commit's parent IS the pre-landing tip, but git cannot prove
+    that (an impl-before-corpus replay is graph-identical), so the bare call
+    is a clean pre-write exit-1 refusal, and the attested call records the
+    anchor with ``pr_merge_evidence: corpus-parent-attested`` naming the
+    operator's attestation — never a git proof (#4231 fix round).
+    """
+    repo_root = (tmp_path / "repo").resolve()
+    repo_root.mkdir()
+    feature_dir, squash_commit, pre_squash_tip = _create_pr_merged_feature(repo_root, squash=True)
+    monkeypatch.setenv("SPECIFY_REPO_ROOT", str(repo_root))
+    monkeypatch.chdir(repo_root)
+
+    with pytest.raises(typer.Exit) as exc_info:
+        accept(
+            mission=_SLUG,
+            mode="pr",
+            actor="tester",
+            test=[],
+            json_output=True,
+            lenient=False,
+            no_commit=False,
+            diagnose=False,
+            allow_fail=False,
+            merge_commit=squash_commit,
+        )
+
+    assert exc_info.value.exit_code == 1
+    meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
+    assert "baseline_merge_commit" not in meta
+    assert "pr_merge_commit" not in meta
+    assert "pr_merge_evidence" not in meta
+
+    accept(
+        mission=_SLUG,
+        mode="pr",
+        actor="tester",
+        test=[],
+        json_output=False,
+        lenient=False,
+        no_commit=False,
+        diagnose=False,
+        allow_fail=False,
+        merge_commit=squash_commit,
+        attest_first_landing=True,
+    )
+
+    meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["baseline_merge_commit"] == pre_squash_tip
+    assert meta["pr_merge_commit"] == squash_commit
+    assert meta["pr_merge_evidence"] == "corpus-parent-attested"

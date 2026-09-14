@@ -96,6 +96,7 @@ def _run(
     *,
     dry_run: bool = False,
     target_branch: str | None = None,
+    attest_first_landing: bool = False,
 ) -> tuple[object, dict]:
     """Invoke the command directly; return (exit-or-None, parsed JSON payload)."""
     import contextlib
@@ -109,6 +110,7 @@ def _run(
                 mission=_SLUG,
                 merge_commit=merge_commit,
                 target_branch=target_branch,
+                attest_first_landing=attest_first_landing,
                 dry_run=dry_run,
                 json_output=True,
             )
@@ -130,9 +132,152 @@ def test_backfill_records_verified_merge(tmp_path: Path, monkeypatch: pytest.Mon
     assert row["action"] == "wrote"
     assert row["pr_merge_commit"] == merge_commit
     assert row["baseline_merge_commit"] == pre_merge_parent
+    assert row["pr_merge_evidence"] == "merge-commit-parent"
+    assert "is a merge commit" in row["reason"]
     meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["baseline_merge_commit"] == pre_merge_parent
     assert meta["pr_merge_commit"] == merge_commit
+    assert meta["pr_merge_evidence"] == "merge-commit-parent"
+
+
+def test_backfill_impl_before_corpus_landing_refused_unattested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The squad-repro shape (#4231 fix round): impl BEFORE the corpus, ff-landed.
+
+    A rebase/fast-forward landing whose implementation commit preceded the
+    corpus commit satisfies every git check (corpus at the commit, absent at
+    its parent, landed on the target) — yet the corpus commit's parent is an
+    earlier same-PR implementation commit, NOT the pre-landing target tip.
+    The bare command must refuse (a recorded anchor there silently
+    under-scans the dead-code gate and the reason string would claim git
+    proved the parent is the tip); under the explicit attestation it records,
+    with the persisted evidence naming the attestation — never a git proof.
+    """
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _git(repo_root, "init", "-q")
+    _git(repo_root, "config", "user.name", "Backfill Test")
+    _git(repo_root, "config", "user.email", "backfill-test@example.invalid")
+    _git(repo_root, "branch", "-M", "main")
+    (repo_root / ".kittify").mkdir()
+    (repo_root / "README.md").write_text("# base\n", encoding="utf-8")
+    _git(repo_root, "add", "-A")
+    _git(repo_root, "commit", "-qm", "base")
+    true_tip = _git(repo_root, "rev-parse", "main").stdout.strip()
+
+    _git(repo_root, "checkout", "-qb", "kitty/mission-impl-first")
+    (repo_root / "src_impl.py").write_text("def orphan_helper():\n    return 1\n", encoding="utf-8")
+    _git(repo_root, "add", "-A")
+    _git(repo_root, "commit", "-qm", "implement first")
+    feature_dir = repo_root / "kitty-specs" / _SLUG
+    feature_dir.mkdir(parents=True)
+    (feature_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "mission_id": _MISSION_ID,
+                "mission_slug": _SLUG,
+                "slug": _SLUG,
+                "acceptance_mode": "pr",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _git(repo_root, "add", "-A")
+    _git(repo_root, "commit", "-qm", "Specify: corpus second")
+    _git(repo_root, "checkout", "-q", "main")
+    _git(repo_root, "merge", "--ff-only", "-q", "kitty/mission-impl-first")
+    corpus = _git(repo_root, "rev-parse", "main").stdout.strip()
+    impl = _git(repo_root, "rev-parse", "main~1").stdout.strip()
+    assert impl != true_tip  # the parent of the corpus commit is mission impl
+    monkeypatch.setenv("SPECIFY_REPO_ROOT", str(repo_root))
+    monkeypatch.chdir(repo_root)
+
+    # Bare call: refused, nothing written, no "pre-landing target tip" claim.
+    exit_obj, payload = _run(repo_root, corpus)
+    assert isinstance(exit_obj, typer.Exit)
+    row = payload["results"][0]
+    assert row["action"] == "error"
+    assert "cannot prove" in row["reason"]
+    assert "--attest-first-landing-commit" in row["reason"]
+    meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
+    assert "baseline_merge_commit" not in meta
+    assert "pr_merge_commit" not in meta
+    assert "pr_merge_evidence" not in meta
+
+    # Dry-run refuses identically — no write path is reached either way.
+    exit_obj, payload = _run(repo_root, corpus, dry_run=True)
+    assert isinstance(exit_obj, typer.Exit)
+    assert payload["results"][0]["action"] == "error"
+
+    # Under the explicit attestation the anchor IS recorded — and the row,
+    # the reason, and the persisted meta all name that it rests on the
+    # operator's attestation, not on a git proof.
+    exit_obj, payload = _run(repo_root, corpus, attest_first_landing=True)
+    assert exit_obj is None, f"attested run must exit 0, got {exit_obj!r}"
+    row = payload["results"][0]
+    assert row["action"] == "wrote"
+    assert row["baseline_merge_commit"] == impl
+    assert row["pr_merge_evidence"] == "corpus-parent-attested"
+    assert "attestation" in row["reason"]
+    meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["baseline_merge_commit"] == impl
+    assert meta["pr_merge_evidence"] == "corpus-parent-attested"
+
+
+def test_backfill_squash_landing_requires_attestation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A squash landing is single-parent: attested, never presented as proven.
+
+    The squash parent IS the pre-landing tip, but git cannot prove that (the
+    impl-before-corpus replay is graph-identical), so the bare call is
+    refused and the attested call records ``corpus-parent-attested``.
+    """
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _git(repo_root, "init", "-q")
+    _git(repo_root, "config", "user.name", "Backfill Test")
+    _git(repo_root, "config", "user.email", "backfill-test@example.invalid")
+    _git(repo_root, "branch", "-M", "main")
+    (repo_root / ".kittify").mkdir()
+    (repo_root / "README.md").write_text("# base\n", encoding="utf-8")
+    _git(repo_root, "add", "-A")
+    _git(repo_root, "commit", "-qm", "base")
+
+    _git(repo_root, "checkout", "-qb", "kitty/mission-head")
+    feature_dir = repo_root / "kitty-specs" / _SLUG
+    feature_dir.mkdir(parents=True)
+    (feature_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "mission_id": _MISSION_ID,
+                "mission_slug": _SLUG,
+                "slug": _SLUG,
+                "acceptance_mode": "pr",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _git(repo_root, "add", "-A")
+    _git(repo_root, "commit", "-qm", "mission corpus")
+    _git(repo_root, "checkout", "-q", "main")
+    _git(repo_root, "merge", "--squash", "-q", "kitty/mission-head")
+    _git(repo_root, "commit", "-qm", "squash-land mission")
+    squash = _git(repo_root, "rev-parse", "main").stdout.strip()
+    pre_squash_tip = _git(repo_root, "rev-parse", "main^1").stdout.strip()
+    monkeypatch.setenv("SPECIFY_REPO_ROOT", str(repo_root))
+    monkeypatch.chdir(repo_root)
+
+    exit_obj, payload = _run(repo_root, squash)
+    assert isinstance(exit_obj, typer.Exit)
+    assert payload["results"][0]["action"] == "error"
+    assert "cannot prove" in payload["results"][0]["reason"]
+
+    exit_obj, payload = _run(repo_root, squash, attest_first_landing=True)
+    assert exit_obj is None
+    row = payload["results"][0]
+    assert row["action"] == "wrote"
+    assert row["baseline_merge_commit"] == pre_squash_tip
+    assert row["pr_merge_evidence"] == "corpus-parent-attested"
 
 
 def test_backfill_dry_run_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -311,12 +456,16 @@ def test_backfill_target_branch_override_for_non_primary_base(tmp_path: Path, mo
     assert row["action"] == "error"
     assert "not on target branch 'main'" in row["reason"]
 
-    # The explicit PR base branch records it.
-    exit_obj, payload = _run(repo_root, landing, target_branch="release")
+    # The explicit PR base branch records it (single-parent landing: under
+    # the operator's first-landing attestation — git cannot prove the parent
+    # is the pre-landing tip for this shape).
+    exit_obj, payload = _run(repo_root, landing, target_branch="release", attest_first_landing=True)
     assert exit_obj is None, f"override run must exit 0, got {exit_obj!r}"
     row = payload["results"][0]
     assert row["action"] == "wrote"
     assert row["baseline_merge_commit"] == pre_release_tip
+    assert row["pr_merge_evidence"] == "corpus-parent-attested"
     meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["baseline_merge_commit"] == pre_release_tip
     assert meta["pr_merge_commit"] == landing
+    assert meta["pr_merge_evidence"] == "corpus-parent-attested"

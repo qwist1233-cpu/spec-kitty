@@ -103,9 +103,14 @@ For non-obvious runtime behaviour an operator may encounter:
 │                                                        parent must not, and │
 │                                                        it must have landed  │
 │                                                        on the target        │
-│                                                        branch) before      │
-│                                                        anything is         │
-│                                                        written.            │
+│                                                        branch) before       │
+│                                                        anything is          │
+│                                                        written. A           │
+│                                                        single-parent landing │
+│                                                        (squash or            │
+│                                                        corpus-first stack)  │
+│                                                        additionally needs   │
+│                                                        --attest-first-landi… │
 │ --target-branch                                 NAME  With --merge-commit:  │
 │                                                        the branch the PR    │
 │                                                        merged into (the     │
@@ -115,6 +120,28 @@ For non-obvious runtime behaviour an operator may encounter:
 │                                                        target_branch, else  │
 │                                                        the repository's     │
 │                                                        primary branch.     │
+│ --attest-first-land…                                   With --merge-commit   │
+│                                                        on a single-parent    │
+│                                                        landing (squash or    │
+│                                                        corpus-first stack):  │
+│                                                        attest that the       │
+│                                                        supplied commit was   │
+│                                                        the first commit of   │
+│                                                        the landing, so its   │
+│                                                        first parent is the   │
+│                                                        pre-landing target    │
+│                                                        tip. Without it a     │
+│                                                        single-parent landing │
+│                                                        commit is refused —   │
+│                                                        git cannot prove its │
+│                                                        parent is the         │
+│                                                        pre-landing tip, and  │
+│                                                        a wrong anchor        │
+│                                                        silently under-scans  │
+│                                                        the dead-code gate. A │
+│                                                        two-parent merge      │
+│                                                        commit needs no       │
+│                                                        attestation.          │
 │ --help                -h                               Show this message and │
 │                                                        exit.                 │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -2965,11 +2992,23 @@ _Migration commands: update .kittify/ layout and backfill identity fields in leg
  ``kitty-specs/<slug>/meta.json``, its first parent must not — proving it
  is the commit that introduced the mission corpus — and it must have
  landed on the target branch, so an unmerged mission-branch commit is
- refused) before ``baseline_merge_commit``
- (the first parent, the pre-landing target tip) and ``pr_merge_commit``
- (the landing commit itself, as provenance) are written through the same
- canonical seam ``spec-kitty merge`` and ``accept --mode pr
- --merge-commit`` use.
+ refused) before ``baseline_merge_commit`` (the first parent) and the
+ provenance pair ``pr_merge_commit`` (the landing commit itself) /
+ ``pr_merge_evidence`` (what the anchor's completeness rests on) are
+ written through the same canonical seam ``spec-kitty merge`` and
+ ``accept --mode pr --merge-commit`` use.
+
+ **What the anchor proves depends on the landing shape.** A two-parent
+ merge commit's first parent is the pre-landing target tip by
+ construction (``pr_merge_evidence: merge-commit-parent`` — proven from
+ git). A single-parent landing commit (squash, or a corpus-first stack)
+ is accepted only with ``--attest-first-landing-commit`` — your explicit
+ attestation that it was the first commit of the landing
+ (``pr_merge_evidence: corpus-parent-attested``) — because git cannot
+ prove its parent is the pre-landing tip: a landing whose implementation
+ commits preceded the corpus has an earlier same-PR commit there,
+ graph-identical to pre-existing target work, and anchoring there would
+ silently under-scan the dead-code gate.
 
  **Idempotent**: a mission whose ``meta.json`` already carries a
  ``baseline_merge_commit`` is skipped and never overwritten.
@@ -2997,13 +3036,31 @@ _Migration commands: update .kittify/ layout and backfill identity fields in leg
 │                                    writing anything — it must carry the      │
 │                                    mission's kitty-specs/<slug>/meta.json,   │
 │                                    its first parent must not, and it must    │
-│                                    have landed on the target branch.         │
+│                                    have landed on the target branch. A       │
+│                                    single-parent landing (squash or          │
+│                                    corpus-first stack) additionally needs    │
+│                                    --attest-first-landing-commit.            │
 │                                    [required]                                │
 │    --target-branch         NAME    The branch the PR merged into (the PR's   │
 │                                    base branch), for the landing check.      │
 │                                    Defaults to the mission's declared        │
 │                                    target_branch, else the repository's      │
 │                                    primary branch.                           │
+│    --attest-first-landi…           Attest that the supplied --merge-commit   │
+│                                    was the FIRST commit of the landing (a   │
+│                                    squash, or a corpus-first stack), so its  │
+│                                    first parent is the pre-landing target    │
+│                                    tip. Required for any single-parent       │
+│                                    landing commit: git cannot prove its      │
+│                                    parent is the pre-landing tip — a landing │
+│                                    whose implementation commits preceded     │
+│                                    the corpus has an earlier same-PR commit  │
+│                                    there, graph-identical to pre-existing    │
+│                                    target work — and a wrong anchor silently │
+│                                    under-scans the dead-code gate. A         │
+│                                    two-parent merge commit needs no          │
+│                                    attestation; its parent is proven from    │
+│                                    git.                                      │
 │    --dry-run                       Verify the merge evidence and report what │
 │                                    would be written without writing any      │
 │                                    files. The JSON shape is identical to a   │

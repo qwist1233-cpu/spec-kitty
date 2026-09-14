@@ -95,6 +95,8 @@ def test_agent_mission_accept_passes_explicit_feature_none(
         no_commit=False,
         diagnose=False,
         allow_fail=False,
+        merge_commit=None,  # #4231: PR-merge evidence passthrough
+        target_branch=None,  # #4231: PR base branch passthrough
     )
 
 
@@ -118,6 +120,8 @@ def test_agent_mission_accept_passes_diagnose_flag(
         no_commit=False,
         diagnose=True,
         allow_fail=False,
+        merge_commit=None,  # #4231: PR-merge evidence passthrough
+        target_branch=None,  # #4231: PR base branch passthrough
     )
 
 
