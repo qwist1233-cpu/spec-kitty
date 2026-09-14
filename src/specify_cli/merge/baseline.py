@@ -291,7 +291,11 @@ class PrMergeEvidence:
     target branch; ``baseline_merge_commit`` is that commit's first parent —
     the target-branch tip immediately before the mission landed, which is the
     same anchor ``spec-kitty merge`` records (the pre-landing baseline, never
-    the landing commit itself).
+    the landing commit itself). This is COMPLETE mission-baseline evidence
+    for the corpus-first landing shapes (merge commit, squash, corpus-first
+    rebase/staged stack); for the one shape where it is not provable from git
+    alone, see the "What the evidence proves" note in
+    :func:`verify_pr_merge_evidence`.
     """
 
     pr_merge_commit: str
@@ -447,13 +451,26 @@ def verify_pr_merge_evidence(
     *target_ref* names the branch the PR merged INTO for check 6: an explicit
     value wins (``main``, ``origin/main``, ``refs/heads/main`` — anything
     rev-parse resolves), else the mission's declared ``target_branch``, else
-    the repository's primary branch. One shape is knowingly NOT provable from
-    git alone: a rebase-style landing whose commits BEFORE the corpus
-    introduced the mission's implementation outside ``kitty-specs/`` — those
-    earlier commits are indistinguishable from unrelated work without the PR's
-    own metadata (the #4277 forge-discovery follow-up), so the operator must
-    supply the corpus-introducing commit and the anchor is honest about
-    covering from there.
+    the repository's primary branch.
+
+    **What the evidence proves, and what it does not.** Checks 1–6 prove the
+    commit landed on the target branch and introduced the mission corpus.
+    They prove the anchor (the first parent) covers the WHOLE mission only
+    for the supported landing shapes — a two-parent merge commit, a squash
+    landing, and a corpus-first stack (rebase or staged) whose first landing
+    commit carries the corpus: there the first parent is the pre-landing
+    target tip by construction. For a multi-commit rebase landing whose
+    commits BEFORE the corpus carried the mission's implementation outside
+    ``kitty-specs/``, that completeness is NOT provable from git alone — an
+    earlier same-PR commit is graph-identical to unrelated work that landed
+    on the target before the PR, so no git check can separate them. This
+    seam therefore does not present the corpus-parent anchor as complete
+    evidence for that shape: the operator who supplies the
+    corpus-introducing commit is attesting where the mission's changes begin,
+    and for a landing whose implementation predates its corpus the honest
+    options are a merge/squash landing (a single commit this seam verifies
+    completely) or the PR's own commit list, which only forge discovery can
+    supply — that correctness work is tracked in #4277, not silently skipped.
     """
     assert_safe_path_segment(mission_slug)
 

@@ -129,6 +129,8 @@ def test_accept_command_delegates_to_toplevel(mock_locate: MagicMock, mock_accep
         no_commit=False,
         diagnose=False,
         allow_fail=False,
+        merge_commit=None,  # #4231: PR-merge evidence passthrough
+        target_branch=None,  # #4231: PR base-branch passthrough
     )
 
 
@@ -162,6 +164,8 @@ def test_accept_command_passes_flags(mock_locate: MagicMock, mock_accept: MagicM
         no_commit=True,
         diagnose=False,
         allow_fail=False,
+        merge_commit=None,  # #4231: PR-merge evidence passthrough
+        target_branch=None,  # #4231: PR base-branch passthrough
     )
 
 
@@ -490,4 +494,6 @@ def test_accept_command_with_all_flags_console_output(mock_locate: MagicMock, mo
         no_commit=True,
         diagnose=False,
         allow_fail=False,
+        merge_commit=None,  # #4231: PR-merge evidence passthrough
+        target_branch=None,  # #4231: PR base-branch passthrough
     )

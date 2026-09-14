@@ -366,6 +366,65 @@ def test_verify_accepts_staged_corpus_then_implementation(tmp_path: Path) -> Non
     assert evidence.baseline_merge_commit == pre_landing_tip
 
 
+def test_impl_before_corpus_rebase_landing_is_the_attestation_gap(tmp_path: Path) -> None:
+    """Implementation BEFORE the corpus: the one shape git alone cannot prove.
+
+    A rebase landing whose first commits carried the mission's implementation
+    outside ``kitty-specs/`` and whose corpus arrives mid-stack: the corpus
+    commit's parent is an earlier same-PR commit, graph-identical to unrelated
+    work that landed on the target before the PR — no git check can separate
+    them, so the seam accepts the corpus-introducing commit (the operator
+    attests where the mission's changes begin) and the anchor is the
+    pre-corpus commit, NOT complete mission-baseline evidence. This test pins
+    that boundary exactly: the contract (see
+    :func:`verify_pr_merge_evidence`'s "What the evidence proves" note) routes
+    that shape to operator attestation and the #4277 forge-discovery
+    correctness work — it must never be presented as a verified-complete
+    anchor, and a regression here (silently refusing it OR claiming it is
+    complete) changes the published contract.
+    """
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _git(repo_root, "init", "-q")
+    _git(repo_root, "config", "user.name", "PR Baseline Test")
+    _git(repo_root, "config", "user.email", "pr-baseline-test@example.invalid")
+    _git(repo_root, "branch", "-M", "main")
+    (repo_root / "README.md").write_text("# base\n", encoding="utf-8")
+    _git(repo_root, "add", "README.md")
+    _git(repo_root, "commit", "-qm", "base")
+
+    _git(repo_root, "checkout", "-qb", "kitty/mission-impl-first")
+    # Implementation lands FIRST, outside kitty-specs/ — invisible to every
+    # corpus check.
+    (repo_root / "src_impl.py").write_text("IMPL = 1\n", encoding="utf-8")
+    _git(repo_root, "add", "-A")
+    _git(repo_root, "commit", "-qm", "implement first")
+    # The corpus arrives second — its parent carries no kitty-specs content.
+    feature_dir = repo_root / "kitty-specs" / _SLUG
+    _write_meta(feature_dir)
+    _git(repo_root, "add", "-A")
+    _git(repo_root, "commit", "-qm", "Specify: corpus second")
+
+    # Rebase-merge landing: replay onto main and fast-forward.
+    _git(repo_root, "checkout", "-q", "main")
+    _git(repo_root, "checkout", "-q", "-b", "replay", "kitty/mission-impl-first")
+    _git(repo_root, "rebase", "main")
+    _git(repo_root, "checkout", "-q", "main")
+    _git(repo_root, "merge", "--ff-only", "-q", "replay")
+    _git(repo_root, "branch", "-qD", "replay")
+    replayed_corpus = _git(repo_root, "rev-parse", "main").stdout.strip()
+    replayed_impl = _git(repo_root, "rev-parse", "main~1").stdout.strip()
+
+    evidence = verify_pr_merge_evidence(repo_root, _SLUG, replayed_corpus)
+
+    # The seam verifies landing + corpus introduction; the anchor is the
+    # pre-CORPUS commit (an earlier same-PR commit), which is precisely the
+    # documented gap — complete evidence would need the PR's commit list.
+    assert evidence.pr_merge_commit == replayed_corpus
+    assert evidence.baseline_merge_commit == replayed_impl
+    assert evidence.baseline_merge_commit != _git(repo_root, "rev-parse", "main~2").stdout.strip()  # the true pre-landing tip — NOT what was recorded
+
+
 def test_verify_rejects_meta_landing_after_staged_siblings(tmp_path: Path) -> None:
     """A corpus staged spec-first, meta-last: the meta commit is refused.
 
