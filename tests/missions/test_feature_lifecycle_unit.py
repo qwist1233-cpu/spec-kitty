@@ -131,6 +131,7 @@ def test_accept_command_delegates_to_toplevel(mock_locate: MagicMock, mock_accep
         allow_fail=False,
         merge_commit=None,  # #4231: PR-merge evidence passthrough
         target_branch=None,  # #4231: PR base-branch passthrough
+        attest_first_landing=False,  # #4231: anchor attestation passthrough
     )
 
 
@@ -166,6 +167,7 @@ def test_accept_command_passes_flags(mock_locate: MagicMock, mock_accept: MagicM
         allow_fail=False,
         merge_commit=None,  # #4231: PR-merge evidence passthrough
         target_branch=None,  # #4231: PR base-branch passthrough
+        attest_first_landing=False,  # #4231: anchor attestation passthrough
     )
 
 
@@ -496,4 +498,5 @@ def test_accept_command_with_all_flags_console_output(mock_locate: MagicMock, mo
         allow_fail=False,
         merge_commit=None,  # #4231: PR-merge evidence passthrough
         target_branch=None,  # #4231: PR base-branch passthrough
+        attest_first_landing=False,  # #4231: anchor attestation passthrough
     )

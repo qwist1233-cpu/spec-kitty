@@ -16,9 +16,13 @@ from REAL git evidence only:
 * :func:`_record_pr_merge_baseline` writes ``baseline_merge_commit`` through
   the canonical writer plus the ``pr_merge_commit`` provenance field, and is
   idempotent over an already-recorded baseline.
-* The landing shapes GitHub actually produces are all covered: a two-parent
-  merge commit, a single-parent squash landing, a rebase-style replay, and a
-  staged corpus-then-implementation stack.
+* The landing shapes GitHub actually produces are all covered — a two-parent
+  merge commit, a single-parent squash landing, a rebase-style replay, a
+  staged corpus-then-implementation stack, and the internal-merge landing —
+  and NONE of them yields a git-proven anchor: an internal merge merged on a
+  mission branch and fast-forwarded onto the target is graph-identical to a
+  merge performed on the target, so every shape is refused without the
+  operator's explicit ``--attest-first-landing-commit`` attestation.
 
 Every test here drives the real ``git`` binary, so the module carries
 ``git_repo`` / ``integration`` / ``non_sandbox`` and must NOT carry ``fast``
@@ -35,10 +39,11 @@ import pytest
 
 from specify_cli.merge.baseline import (
     ANCHOR_EVIDENCE_CORPUS_PARENT_ATTESTED,
-    ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT,
+    ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED,
     _PR_MERGE_COMMIT_FIELD,
     _PR_MERGE_EVIDENCE_FIELD,
     _record_pr_merge_baseline,
+    _stamp_pr_merge_provenance,
     PrMergeEvidenceError,
     verify_pr_merge_evidence,
 )
@@ -117,19 +122,28 @@ def _pr_merged_repo(
     return repo_root, feature_dir, merge_commit, pre_merge_parent
 
 
-def test_verify_two_parent_merge_commit_yields_pre_landing_tip(
+def test_verify_two_parent_merge_commit_needs_attestation(
     tmp_path: Path,
 ) -> None:
-    """Happy path: baseline is the merge commit's first parent, not the merge itself."""
+    """A two-parent merge landing's anchor is the first parent — ATTESTED.
+
+    Two parents alone do not prove the first parent is the pre-landing
+    target tip: a merge performed on the target branch is graph-identical to
+    an internal merge fast-forwarded onto the target (see
+    ``test_internal_merge_fast_forwarded_to_target_is_the_attestation_gap``),
+    so the bare call is refused and the attested call records the anchor as
+    resting on that attestation, never on git proof.
+    """
     repo_root, _feature_dir, merge_commit, pre_merge_parent = _pr_merged_repo(tmp_path)
 
-    evidence = verify_pr_merge_evidence(repo_root, _SLUG, merge_commit)
+    with pytest.raises(PrMergeEvidenceError, match="two parents alone do not prove"):
+        verify_pr_merge_evidence(repo_root, _SLUG, merge_commit)
+
+    evidence = verify_pr_merge_evidence(repo_root, _SLUG, merge_commit, attest_first_landing=True)
 
     assert evidence.pr_merge_commit == merge_commit
     assert evidence.baseline_merge_commit == pre_merge_parent
-    # A two-parent landing is the one shape whose anchor completeness git
-    # PROVES: the first parent is the target side of the merge by construction.
-    assert evidence.anchor_evidence == ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT
+    assert evidence.anchor_evidence == ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED
 
 
 def test_verify_accepts_short_sha_and_normalizes_to_full(
@@ -138,7 +152,7 @@ def test_verify_accepts_short_sha_and_normalizes_to_full(
     """A shortened SHA resolves to the full commit — the operator copies it off the PR page."""
     repo_root, _feature_dir, merge_commit, _parent = _pr_merged_repo(tmp_path)
 
-    evidence = verify_pr_merge_evidence(repo_root, _SLUG, merge_commit[:10])
+    evidence = verify_pr_merge_evidence(repo_root, _SLUG, merge_commit[:10], attest_first_landing=True)
 
     assert evidence.pr_merge_commit == merge_commit
 
@@ -473,6 +487,81 @@ def test_impl_before_corpus_rebase_landing_is_the_attestation_gap(tmp_path: Path
     assert meta[_PR_MERGE_EVIDENCE_FIELD] == ANCHOR_EVIDENCE_CORPUS_PARENT_ATTESTED
 
 
+def test_internal_merge_fast_forwarded_to_target_is_the_attestation_gap(
+    tmp_path: Path,
+) -> None:
+    """The internal-merge landing: two parents that prove nothing.
+
+    The counterexample from the #4231 fix-round review: main base B; the
+    implementation branch adds ``impl.py`` at I; a sibling corpus branch adds
+    ``kitty-specs/<slug>/meta.json`` at C; C is merged INTO the
+    implementation branch producing the two-parent merge M (first parent I);
+    main is then fast-forwarded to M. Post-landing git history is
+    graph-identical to a merge performed on the target branch, yet M's first
+    parent is the implementation commit I — anchoring there omits ``impl.py``
+    from the scan range. The bare call must therefore be refused (never
+    stamped as a git-proven ``merge-commit-parent`` anchor), and only the
+    operator's explicit attestation records it, naming the attestation.
+    """
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _git(repo_root, "init", "-q")
+    _git(repo_root, "config", "user.name", "PR Baseline Test")
+    _git(repo_root, "config", "user.email", "pr-baseline-test@example.invalid")
+    _git(repo_root, "branch", "-M", "main")
+    (repo_root / "README.md").write_text("# base\n", encoding="utf-8")
+    _git(repo_root, "add", "README.md")
+    _git(repo_root, "commit", "-qm", "base")
+
+    # Implementation branch: mission work OUTSIDE kitty-specs/, invisible to
+    # every corpus check.
+    _git(repo_root, "checkout", "-qb", "kitty/mission-impl")
+    (repo_root / "impl.py").write_text("IMPL = 1\n", encoding="utf-8")
+    _git(repo_root, "add", "-A")
+    _git(repo_root, "commit", "-qm", "implement")
+    impl_commit = _git(repo_root, "rev-parse", "HEAD").stdout.strip()
+
+    # Sibling corpus branch: only the mission corpus.
+    _git(repo_root, "checkout", "-qb", "kitty/mission-corpus", "main")
+    feature_dir = repo_root / "kitty-specs" / _SLUG
+    _write_meta(feature_dir)
+    _git(repo_root, "add", "-A")
+    _git(repo_root, "commit", "-qm", "Specify: corpus")
+
+    # Internal merge: the corpus branch is merged INTO the implementation
+    # branch (first parent = the implementation commit), then main is
+    # fast-forwarded to the merge — graph-identical to a PR merge performed
+    # on the target branch.
+    _git(repo_root, "checkout", "-q", "kitty/mission-impl")
+    _git(repo_root, "merge", "--no-ff", "-qm", "Merge corpus into implementation", "kitty/mission-corpus")
+    internal_merge = _git(repo_root, "rev-parse", "HEAD").stdout.strip()
+    _git(repo_root, "checkout", "-q", "main")
+    _git(repo_root, "merge", "--ff-only", "-q", "kitty/mission-impl")
+    assert _git(repo_root, "rev-parse", "main").stdout.strip() == internal_merge
+    # The gap: a scan anchored at the merge's first parent omits impl.py.
+    diff_names = _git(repo_root, "diff", "--name-only", f"{internal_merge}^1..main").stdout.split()
+    assert "impl.py" not in diff_names
+
+    # The bare call is refused — never recorded as a git-proven anchor.
+    with pytest.raises(PrMergeEvidenceError, match="two parents alone do not prove"):
+        verify_pr_merge_evidence(repo_root, _SLUG, internal_merge, target_ref="main")
+
+    # Under the operator's explicit attestation the anchor IS recorded — as
+    # the implementation commit, which is precisely the documented gap — and
+    # the persisted evidence class names the attestation, never a git proof.
+    evidence = verify_pr_merge_evidence(repo_root, _SLUG, internal_merge, target_ref="main", attest_first_landing=True)
+    assert evidence.pr_merge_commit == internal_merge
+    assert evidence.baseline_merge_commit == impl_commit
+    assert evidence.anchor_evidence == ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED
+
+    recorded = _record_pr_merge_baseline(feature_dir, repo_root, _SLUG, internal_merge, target_ref="main", attest_first_landing=True)
+    assert recorded.anchor_evidence == ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED
+    meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["baseline_merge_commit"] == impl_commit
+    assert meta[_PR_MERGE_COMMIT_FIELD] == internal_merge
+    assert meta[_PR_MERGE_EVIDENCE_FIELD] == ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED
+
+
 def test_verify_rejects_meta_landing_after_staged_siblings(tmp_path: Path) -> None:
     """A corpus staged spec-first, meta-last: the meta commit is refused.
 
@@ -520,7 +609,7 @@ def test_verify_explicit_target_ref(tmp_path: Path) -> None:
     repo_root, _feature_dir, merge_commit, pre_merge_parent = _pr_merged_repo(tmp_path)
 
     for ref in ("main", "refs/heads/main"):
-        evidence = verify_pr_merge_evidence(repo_root, _SLUG, merge_commit, target_ref=ref)
+        evidence = verify_pr_merge_evidence(repo_root, _SLUG, merge_commit, target_ref=ref, attest_first_landing=True)
         assert evidence.baseline_merge_commit == pre_merge_parent
 
 
@@ -591,27 +680,27 @@ def test_verify_rejects_malformed_target_ref(tmp_path: Path, bogus_target: str) 
 def test_record_writes_baseline_and_provenance(tmp_path: Path) -> None:
     repo_root, feature_dir, merge_commit, pre_merge_parent = _pr_merged_repo(tmp_path)
 
-    evidence = _record_pr_merge_baseline(feature_dir, repo_root, _SLUG, merge_commit)
+    evidence = _record_pr_merge_baseline(feature_dir, repo_root, _SLUG, merge_commit, attest_first_landing=True)
 
     assert evidence.baseline_merge_commit == pre_merge_parent
-    assert evidence.anchor_evidence == ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT
+    assert evidence.anchor_evidence == ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED
     meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["baseline_merge_commit"] == pre_merge_parent
     assert meta[_PR_MERGE_COMMIT_FIELD] == merge_commit
-    assert meta[_PR_MERGE_EVIDENCE_FIELD] == ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT
+    assert meta[_PR_MERGE_EVIDENCE_FIELD] == ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED
 
 
 def test_record_is_idempotent_and_set_once(tmp_path: Path) -> None:
     """A re-run never overwrites a recorded baseline or provenance stamp."""
     repo_root, feature_dir, merge_commit, pre_merge_parent = _pr_merged_repo(tmp_path)
-    _record_pr_merge_baseline(feature_dir, repo_root, _SLUG, merge_commit)
+    _record_pr_merge_baseline(feature_dir, repo_root, _SLUG, merge_commit, attest_first_landing=True)
 
     # Re-running with the same verified commit changes nothing.
-    _record_pr_merge_baseline(feature_dir, repo_root, _SLUG, merge_commit)
+    _record_pr_merge_baseline(feature_dir, repo_root, _SLUG, merge_commit, attest_first_landing=True)
     meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["baseline_merge_commit"] == pre_merge_parent
     assert meta[_PR_MERGE_COMMIT_FIELD] == merge_commit
-    assert meta[_PR_MERGE_EVIDENCE_FIELD] == ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT
+    assert meta[_PR_MERGE_EVIDENCE_FIELD] == ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED
 
     # An already-recorded baseline is never replaced, even by a fresh call
     # whose verification would derive a different value (set-once semantics of
@@ -620,7 +709,7 @@ def test_record_is_idempotent_and_set_once(tmp_path: Path) -> None:
     meta[_PR_MERGE_COMMIT_FIELD] = "f00d0000000000000000000000000000000000000"
     meta[_PR_MERGE_EVIDENCE_FIELD] = "faca000000000000000000000000000000000000"
     (feature_dir / "meta.json").write_text(json.dumps(meta) + "\n", encoding="utf-8")
-    _record_pr_merge_baseline(feature_dir, repo_root, _SLUG, merge_commit)
+    _record_pr_merge_baseline(feature_dir, repo_root, _SLUG, merge_commit, attest_first_landing=True)
     meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["baseline_merge_commit"] == "cafe000000000000000000000000000000000000"
     assert meta[_PR_MERGE_COMMIT_FIELD] == "f00d0000000000000000000000000000000000000"
@@ -651,3 +740,76 @@ def test_verify_rejects_non_sha_input_before_any_git_run(tmp_path: Path, bogus: 
 
     with pytest.raises(PrMergeEvidenceError, match="is not a commit SHA"):
         verify_pr_merge_evidence(repo_root, _SLUG, bogus)
+
+
+def test_verify_refuses_unreadable_declared_target_branch(tmp_path: Path) -> None:
+    """A corrupt working ``meta.json`` is a clean refusal at target resolution.
+
+    The git checks read the COMMITTED corpus, so they all pass; the declared
+    ``target_branch`` read is the first working-tree read, and a corrupt
+    ``meta.json`` there must refuse loudly (never guess a target) — the
+    mission-declared target is what the landing check runs against.
+    """
+    repo_root, feature_dir, merge_commit, _parent = _pr_merged_repo(tmp_path)
+    (feature_dir / "meta.json").write_text("{ not valid json", encoding="utf-8")
+
+    with pytest.raises(PrMergeEvidenceError, match="cannot read mission .* declared target branch"):
+        verify_pr_merge_evidence(repo_root, _SLUG, merge_commit)
+
+
+def test_verify_rejects_option_shaped_declared_target_branch(tmp_path: Path) -> None:
+    """A declared ``target_branch`` that looks like a git option never reaches git."""
+    repo_root, feature_dir, merge_commit, _parent = _pr_merged_repo(tmp_path)
+    _meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
+    _meta["target_branch"] = "--evil"
+    (feature_dir / "meta.json").write_text(json.dumps(_meta) + "\n", encoding="utf-8")
+
+    with pytest.raises(PrMergeEvidenceError, match="declared target_branch '--evil' is not a branch name"):
+        verify_pr_merge_evidence(repo_root, _SLUG, merge_commit)
+
+
+def test_record_refuses_corrupt_working_meta_without_writing(tmp_path: Path) -> None:
+    """A corrupt working ``meta.json`` fails the recording after verification.
+
+    The git evidence verifies (an explicit target skips the declared-target
+    read), but the recording's own working-meta read is fail-closed: nothing
+    is written, and the operator sees the corrupt-file reason.
+    """
+    repo_root, feature_dir, merge_commit, _parent = _pr_merged_repo(tmp_path)
+    (feature_dir / "meta.json").write_text("{ not valid json", encoding="utf-8")
+
+    with pytest.raises(PrMergeEvidenceError, match="cannot record a PR merge baseline"):
+        _record_pr_merge_baseline(feature_dir, repo_root, _SLUG, merge_commit, target_ref="main", attest_first_landing=True)
+    assert (feature_dir / "meta.json").read_text(encoding="utf-8") == "{ not valid json"
+
+
+def test_record_refuses_missing_working_meta_at_the_stamp(tmp_path: Path) -> None:
+    """A legacy mission whose working ``meta.json`` vanished refuses at the stamp.
+
+    With no ``mission_id`` the canonical writer soft-warns (legacy lane), so
+    the refusal the operator sees is the provenance stamp's own fail-closed
+    missing-file error — the recording never silently proceeds without the
+    provenance pair.
+    """
+    repo_root, feature_dir, merge_commit, _parent = _pr_merged_repo(tmp_path)
+    # Legacy: the committed corpus carries no mission_id, and the working
+    # copy is deleted outright after the commit.
+    _meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
+    _meta.pop("mission_id", None)
+    (feature_dir / "meta.json").write_text(json.dumps(_meta) + "\n", encoding="utf-8")
+    _git(repo_root, "add", "-A")
+    _git(repo_root, "commit", "-qm", "legacy meta")
+    _git(repo_root, "rev-parse", "HEAD")  # corpus still committed for the git checks
+    (feature_dir / "meta.json").unlink()
+
+    with pytest.raises(PrMergeEvidenceError, match="meta.json is missing"):
+        _record_pr_merge_baseline(feature_dir, repo_root, _SLUG, merge_commit, target_ref="main", attest_first_landing=True)
+
+
+def test_stamp_refuses_invalid_working_meta(tmp_path: Path) -> None:
+    """The provenance stamp alone is fail-closed on a corrupt ``meta.json``."""
+    repo_root, feature_dir, _merge_commit, _parent = _pr_merged_repo(tmp_path)
+    (feature_dir / "meta.json").write_text("[ not a json object", encoding="utf-8")
+
+    with pytest.raises(PrMergeEvidenceError, match=f"cannot stamp {_PR_MERGE_COMMIT_FIELD}"):
+        _stamp_pr_merge_provenance(feature_dir, _merge_commit, "corpus-parent-attested")

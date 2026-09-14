@@ -121,23 +121,39 @@ def _run(
 
 
 def test_backfill_records_verified_merge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A two-parent merge landing records ATTESTED — never as a git proof.
+
+    The internal-merge counterexample (#4231 fix round 4) proved a two-parent
+    merge's first parent is not necessarily the pre-landing target tip, so
+    the bare run is refused and the attested run records
+    ``merge-commit-parent-attested``, with the reason string naming the
+    attestation instead of claiming git proved the parent was the tip.
+    """
     repo_root, feature_dir, merge_commit, pre_merge_parent = _pr_merged_repo(tmp_path)
     monkeypatch.setenv("SPECIFY_REPO_ROOT", str(repo_root))
     monkeypatch.chdir(repo_root)
 
     exit_obj, payload = _run(repo_root, merge_commit)
+    row = payload["results"][0]
+    assert exit_obj is not None, "unattested two-parent run must exit 1"
+    assert row["action"] == "error"
+    assert "--attest-first-landing-commit" in row["reason"]
+    assert "two parents alone do not prove" in row["reason"]
 
-    assert exit_obj is None, f"live run must exit 0, got {exit_obj!r}"
+    exit_obj, payload = _run(repo_root, merge_commit, attest_first_landing=True)
+
+    assert exit_obj is None, f"attested run must exit 0, got {exit_obj!r}"
     row = payload["results"][0]
     assert row["action"] == "wrote"
     assert row["pr_merge_commit"] == merge_commit
     assert row["baseline_merge_commit"] == pre_merge_parent
-    assert row["pr_merge_evidence"] == "merge-commit-parent"
-    assert "is a merge commit" in row["reason"]
+    assert row["pr_merge_evidence"] == "merge-commit-parent-attested"
+    assert "attestation" in row["reason"]
+    assert "is a merge commit, so" not in row["reason"]
     meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["baseline_merge_commit"] == pre_merge_parent
     assert meta["pr_merge_commit"] == merge_commit
-    assert meta["pr_merge_evidence"] == "merge-commit-parent"
+    assert meta["pr_merge_evidence"] == "merge-commit-parent-attested"
 
 
 def test_backfill_impl_before_corpus_landing_refused_unattested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -286,7 +302,7 @@ def test_backfill_dry_run_writes_nothing(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.chdir(repo_root)
     before = (feature_dir / "meta.json").read_text(encoding="utf-8")
 
-    exit_obj, payload = _run(repo_root, merge_commit, dry_run=True)
+    exit_obj, payload = _run(repo_root, merge_commit, dry_run=True, attest_first_landing=True)
 
     assert exit_obj is None
     row = payload["results"][0]
@@ -299,10 +315,10 @@ def test_backfill_is_idempotent_skip_on_recorded_baseline(tmp_path: Path, monkey
     repo_root, feature_dir, merge_commit, _parent = _pr_merged_repo(tmp_path)
     monkeypatch.setenv("SPECIFY_REPO_ROOT", str(repo_root))
     monkeypatch.chdir(repo_root)
-    _run(repo_root, merge_commit)
+    _run(repo_root, merge_commit, attest_first_landing=True)
     recorded = (feature_dir / "meta.json").read_text(encoding="utf-8")
 
-    exit_obj, payload = _run(repo_root, merge_commit)
+    exit_obj, payload = _run(repo_root, merge_commit, attest_first_landing=True)
 
     assert exit_obj is None, "a skip is a success, not an error"
     row = payload["results"][0]

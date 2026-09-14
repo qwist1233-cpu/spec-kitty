@@ -342,8 +342,8 @@ _MERGE_COMMIT_HELP = (
     "Read it off the merged PR, then supply it here; the migration verifies "
     "it against git before writing anything — it must carry the mission's "
     "kitty-specs/<slug>/meta.json, its first parent must not, and it must "
-    "have landed on the target branch. A single-parent landing (squash or "
-    "corpus-first stack) additionally needs --attest-first-landing-commit."
+    "have landed on the target branch. Every landing shape additionally "
+    "needs --attest-first-landing-commit."
 )
 
 _MERGE_COMMIT_TARGET_HELP = (
@@ -353,14 +353,16 @@ _MERGE_COMMIT_TARGET_HELP = (
 )
 
 _MERGE_COMMIT_ATTEST_HELP = (
-    "Attest that the supplied --merge-commit was the FIRST commit of the "
-    "landing (a squash, or a corpus-first stack), so its first parent is the "
-    "pre-landing target tip. Required for any single-parent landing commit: "
-    "git cannot prove its parent is the pre-landing tip — a landing whose "
-    "implementation commits preceded the corpus has an earlier same-PR "
-    "commit there, graph-identical to pre-existing target work — and a wrong "
-    "anchor silently under-scans the dead-code gate. A two-parent merge "
-    "commit needs no attestation; its parent is proven from git."
+    "Attest that the supplied --merge-commit's first parent is the "
+    "pre-landing target tip. Required for every landing shape: for a "
+    "two-parent merge commit, attest the merge was performed ON the target "
+    "branch (a merge performed on a mission or sibling branch and then "
+    "fast-forwarded onto the target is graph-identical, and its first "
+    "parent is an implementation commit, not the tip); for a single-parent "
+    "landing (squash or corpus-first stack), attest the supplied commit was "
+    "the FIRST commit of the landing. Git cannot prove either — and a wrong "
+    "anchor silently under-scans the dead-code gate. The attestation is "
+    "recorded in pr_merge_evidence, never presented as a git proof."
 )
 
 _MERGE_COMMIT_DRY_RUN_HELP = "Verify the merge evidence and report what would be written without writing any files. The JSON shape is identical to a live run."
@@ -423,17 +425,24 @@ def backfill_merge_commit_cmd(
     written through the same canonical seam ``spec-kitty merge`` and
     ``accept --mode pr --merge-commit`` use.
 
-    **What the anchor proves depends on the landing shape.** A two-parent
-    merge commit's first parent is the pre-landing target tip by
-    construction (``pr_merge_evidence: merge-commit-parent`` — proven from
-    git). A single-parent landing commit (squash, or a corpus-first stack)
-    is accepted only with ``--attest-first-landing-commit`` — your explicit
-    attestation that it was the first commit of the landing
-    (``pr_merge_evidence: corpus-parent-attested``) — because git cannot
-    prove its parent is the pre-landing tip: a landing whose implementation
-    commits preceded the corpus has an earlier same-PR commit there,
-    graph-identical to pre-existing target work, and anchoring there would
-    silently under-scan the dead-code gate.
+    **What the anchor proves depends on the landing shape — and on your
+    attestation, never on git.** Checks 1–6 prove the commit landed on the
+    target branch and introduced the mission corpus; they cannot prove its
+    first parent is the PRE-LANDING TARGET TIP for any shape. A two-parent
+    merge commit's first parent is the tip only if the merge was performed
+    on the target branch — an internal merge (the corpus branch merged into
+    the implementation branch, the target then fast-forwarded to the
+    result) is graph-identical and its first parent is an implementation
+    commit. A single-parent landing commit (squash, or a corpus-first stack)
+    has the tip as its parent only if it was the first commit of the
+    landing. Both shapes therefore require ``--attest-first-landing-commit``
+    — your explicit attestation — and record it as the anchor's evidence
+    class (``pr_merge_evidence: merge-commit-parent-attested`` /
+    ``corpus-parent-attested``), so the anchor's completeness rests on a
+    recorded operator attestation, never on a claim git did not make.
+    Anchoring at the wrong tip would silently under-scan the dead-code
+    gate. Full forge commit-list evidence, which would prove the tip
+    outright, is tracked in #4277.
 
     **Idempotent**: a mission whose ``meta.json`` already carries a
     ``baseline_merge_commit`` is skipped and never overwritten.
@@ -453,7 +462,7 @@ def backfill_merge_commit_cmd(
     from specify_cli.cli.selector_resolution import resolve_mission_handle
     from specify_cli.core.paths import MissionMetaReadError, load_meta_fail_closed
     from specify_cli.merge.baseline import (
-        ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT,
+        ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED,
         PrMergeEvidenceError,
         record_pr_merge_baseline_for_mission,
         resolve_primary_meta_dir,
@@ -510,9 +519,15 @@ def backfill_merge_commit_cmd(
                     attest_first_landing=attest_first_landing,
                 )
             result["action"] = "would_write" if dry_run else "wrote"
-            if evidence.anchor_evidence == ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT:
+            if evidence.anchor_evidence == ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED:
                 result["reason"] = (
-                    "verified against git: the commit landed on the target branch and is a merge commit, so its first parent is the pre-landing target tip"
+                    "verified against git: the commit landed on the target "
+                    "branch and introduced the mission corpus; its first "
+                    "parent is the pre-landing target tip by your "
+                    "--attest-first-landing-commit attestation that the "
+                    "merge was performed on the target branch — git cannot "
+                    "prove this for a two-parent landing (an internal merge "
+                    "is graph-identical)"
                 )
             else:
                 result["reason"] = (

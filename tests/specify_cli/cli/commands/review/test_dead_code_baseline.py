@@ -242,20 +242,21 @@ def test_pr_reason_absent_when_baseline_present(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# #4231 fix round: the anchor-evidence field. ``pr_merge_evidence`` (written
-# only by the PR-merge recording seam) names what the recorded anchor's
-# completeness rests on. The two values that seam writes — and an absent
-# field (the ``spec-kitty merge`` local-recording lane) — scan normally; any
-# other PRESENT value surfaces DEAD_CODE_EVIDENCE_INCOMPLETE instead of a
-# green scan over a possibly truncated diff.
+# #4231 fix rounds: the anchor-evidence field. ``pr_merge_evidence``
+# (written only by the PR-merge recording seam) names what the recorded
+# anchor's completeness rests on. The two values that seam writes — both
+# recorded under the operator's attestation — and an absent field (the
+# ``spec-kitty merge`` local-recording lane) scan normally; any other
+# PRESENT value surfaces DEAD_CODE_EVIDENCE_INCOMPLETE instead of a green
+# scan over a possibly truncated diff.
 # ---------------------------------------------------------------------------
 
 
 def test_unrecognized_anchor_evidence_surfaces_incomplete_state(tmp_path: Path) -> None:
     """A present-but-unrecognized ``pr_merge_evidence`` never scans green.
 
-    The recording seam refuses the unattested single-parent shape, so it
-    never writes ``corpus-parent`` — a present value like it means a
+    The recording seam refuses every unattested shape, so it never
+    writes ``corpus-parent`` — a present value like it means a
     hand-edited or unknown-tool anchor whose completeness is unestablished.
     The gate must surface that state INSTEAD of running the scan (an anchor
     at an earlier same-PR commit silently truncates the diff), which this
@@ -290,7 +291,7 @@ def test_unrecognized_anchor_evidence_surfaces_incomplete_state(tmp_path: Path) 
 
 
 def test_recognized_anchor_evidence_values_scan_normally(tmp_path: Path) -> None:
-    """The two seam-written values — and an absent field — never fire the code.
+    """The two seam-written (attested) values — and an absent field — never fire the code.
 
     For these the gate proceeds to the real scan (here it fails
     ``undeterminable`` because ``tmp_path`` is not a git repository — the
@@ -298,7 +299,7 @@ def test_recognized_anchor_evidence_values_scan_normally(tmp_path: Path) -> None
     """
     console = Console(force_terminal=False, no_color=True, record=True)
     for evidence_value in (
-        "merge-commit-parent",
+        "merge-commit-parent-attested",
         "corpus-parent-attested",
         None,
         "",

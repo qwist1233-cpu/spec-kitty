@@ -248,14 +248,37 @@ def _porcelain(repo_root: Path) -> str:
 
 
 def test_accept_pr_mode_records_verified_merge_as_baseline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``accept --mode pr --merge-commit <sha>`` records the real merge evidence."""
+    """``accept --mode pr --merge-commit <sha> --attest-first-landing-commit`` records real merge evidence.
+
+    A two-parent merge landing is recordable only under the operator's
+    attestation (two parents alone do not prove the first parent is the
+    pre-landing target tip — the internal-merge landing is graph-identical),
+    and the persisted evidence class names the attestation.
+    """
     repo_root = (tmp_path / "repo").resolve()
     repo_root.mkdir()
     feature_dir, merge_commit, pre_merge_parent = _create_pr_merged_feature(repo_root)
     monkeypatch.setenv("SPECIFY_REPO_ROOT", str(repo_root))
     monkeypatch.chdir(repo_root)
 
-    # Successful (non-json) accept returns normally; no Exit is raised.
+    # Unattested: a clean pre-write exit-1 refusal, nothing recorded.
+    with pytest.raises(typer.Exit) as exit_info:
+        accept(
+            mission=_SLUG,
+            mode="pr",
+            actor="tester",
+            test=[],
+            json_output=True,
+            lenient=False,
+            no_commit=False,
+            diagnose=False,
+            allow_fail=False,
+            merge_commit=merge_commit,
+        )
+    assert exit_info.value.exit_code == 1
+    assert "baseline_merge_commit" not in (feature_dir / "meta.json").read_text(encoding="utf-8")
+
+    # Successful (non-json) attested accept returns normally; no Exit is raised.
     accept(
         mission=_SLUG,
         mode="pr",
@@ -267,6 +290,7 @@ def test_accept_pr_mode_records_verified_merge_as_baseline(tmp_path: Path, monke
         diagnose=False,
         allow_fail=False,
         merge_commit=merge_commit,
+        attest_first_landing=True,
     )
 
     meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
@@ -274,7 +298,7 @@ def test_accept_pr_mode_records_verified_merge_as_baseline(tmp_path: Path, monke
         f"baseline must be the merge commit's first parent (the pre-landing target tip), not the merge commit itself: {meta}"
     )
     assert meta["pr_merge_commit"] == merge_commit
-    assert meta["pr_merge_evidence"] == "merge-commit-parent"
+    assert meta["pr_merge_evidence"] == "merge-commit-parent-attested"
     assert meta["acceptance_mode"] == "pr"
 
     # The recording is swept into the residual finalize commit: clean tree.
@@ -357,6 +381,7 @@ def test_accept_no_commit_verifies_but_does_not_write(tmp_path: Path, monkeypatc
         diagnose=False,
         allow_fail=False,
         merge_commit=merge_commit,
+        attest_first_landing=True,
     )
 
     meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))

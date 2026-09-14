@@ -181,17 +181,18 @@ _REASON_PR_MERGE_UNRECORDED = "pr_accepted_merge_unrecorded"
 _REASON_NEVER_MERGED = "never_merged_via_spec_kitty_merge"
 
 #: ``meta.json`` ``pr_merge_evidence`` values the dead-code gate accepts as a
-#: COMPLETE anchor: a two-parent merge landing (proven from git — the first
-#: parent is the target side by construction) and a single-parent landing
-#: recorded under the operator's explicit ``--attest-first-landing-commit``
-#: attestation (#4231 fix round). An ABSENT field is the ``spec-kitty merge``
+#: COMPLETE anchor: a two-parent merge landing and a single-parent landing,
+#: each recorded under the operator's explicit ``--attest-first-landing-commit``
+#: attestation (#4231 fix rounds 3–4 — neither shape is a git proof, because
+#: post-landing git history cannot show which side of a landing the target
+#: branch stood on). An ABSENT field is the ``spec-kitty merge``
 #: local-recording lane (which captures the real target tip at merge time) and
 #: scans normally; a PRESENT value outside this set means the anchor's
 #: completeness is not established, so the gate surfaces that state instead of
 #: reporting a green scan over a possibly truncated diff.
 _COMPLETE_ANCHOR_EVIDENCE = frozenset(
     {
-        "merge-commit-parent",
+        "merge-commit-parent-attested",
         "corpus-parent-attested",
     }
 )
@@ -200,11 +201,11 @@ _PR_MERGE_EVIDENCE_INCOMPLETE_REMEDIATION = (
     "This mission's baseline_merge_commit was recorded from a PR landing "
     "whose anchor evidence is not recognized as complete "
     f"(pr_merge_evidence must be one of {sorted(_COMPLETE_ANCHOR_EVIDENCE)}). "
-    "Re-record the baseline from the PR's merge commit (`spec-kitty migrate "
-    "backfill-merge-commit --mission <slug> --merge-commit <merge-sha>`), or "
-    "from a single-parent landing with the operator attestation "
-    "(`--attest-first-landing-commit`), then rerun review. A scan anchored "
-    "on incomplete evidence could silently miss mission changes."
+    "Re-record the baseline from the PR's landing commit with the operator "
+    "attestation (`spec-kitty migrate backfill-merge-commit --mission "
+    "<slug> --merge-commit <sha> --attest-first-landing-commit`), then rerun "
+    "review. A scan anchored on incomplete evidence could silently miss "
+    "mission changes."
 )
 
 _PR_MERGE_UNRECORDED_REMEDIATION = (
@@ -308,10 +309,11 @@ def scan_dead_code(
 
     ``pr_merge_evidence`` (from ``meta.json``, written only by the PR-merge
     recording seam) names what the anchor's completeness rests on. The two
-    values that seam writes — ``merge-commit-parent`` (proven from git) and
-    ``corpus-parent-attested`` (the operator's recorded attestation) — and an
-    absent field (the ``spec-kitty merge`` local-recording lane) scan
-    normally; any other PRESENT value surfaces
+    values that seam writes — ``merge-commit-parent-attested`` and
+    ``corpus-parent-attested`` (a two-parent and a single-parent landing,
+    each recorded under the operator's ``--attest-first-landing-commit``
+    attestation) — and an absent field (the ``spec-kitty merge``
+    local-recording lane) scan normally; any other PRESENT value surfaces
     ``MISSION_REVIEW_DEAD_CODE_EVIDENCE_INCOMPLETE`` instead of a green scan,
     because the anchor may not cover the whole mission.
     """

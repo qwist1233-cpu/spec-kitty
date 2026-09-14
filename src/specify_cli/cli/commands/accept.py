@@ -749,9 +749,8 @@ def accept(
                 "post-merge review baseline. The commit is verified against git "
                 "before anything is written — it must carry "
                 "kitty-specs/<slug>/meta.json, its first parent must not, and it "
-                "must have landed on the target branch. A single-parent landing "
-                "(squash or corpus-first stack) additionally needs "
-                "--attest-first-landing-commit."
+                "must have landed on the target branch. Every landing shape "
+                "additionally needs --attest-first-landing-commit."
             ),
         ),
     ] = None,
@@ -771,13 +770,17 @@ def accept(
         typer.Option(
             "--attest-first-landing-commit",
             help=(
-                "With --merge-commit on a single-parent landing (squash or "
-                "corpus-first stack): attest that the supplied commit was the "
-                "first commit of the landing, so its first parent is the "
-                "pre-landing target tip. Without it a single-parent landing "
-                "commit is refused — git cannot prove its parent is the "
-                "pre-landing tip, and a wrong anchor silently under-scans the "
-                "dead-code gate. A two-parent merge commit needs no attestation."
+                "With --merge-commit: attest that the supplied commit's first "
+                "parent is the pre-landing target tip — for a two-parent "
+                "merge commit, that the merge was performed ON the target "
+                "branch (an internal merge fast-forwarded onto the target "
+                "is graph-identical, and its first parent is an "
+                "implementation commit); for a single-parent landing (squash "
+                "or corpus-first stack), that it was the first commit of the "
+                "landing. Required for every landing shape: git cannot prove "
+                "either, and a wrong anchor silently under-scans the "
+                "dead-code gate. The attestation is recorded in "
+                "pr_merge_evidence, never presented as a git proof."
             ),
         ),
     ] = False,

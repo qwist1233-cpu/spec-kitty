@@ -58,16 +58,21 @@ _PR_MERGE_COMMIT_FIELD = "pr_merge_commit"
 
 #: Second provenance field written with :data:`_PR_MERGE_COMMIT_FIELD`: what
 #: kind of evidence the recorded ``baseline_merge_commit`` anchor rests on, so
-#: ``spec-kitty review --mode post-merge`` can tell a git-PROVEN complete anchor
-#: from one that rests on a recorded operator attestation — and refuse to
-#: report a green dead-code scan for any value it does not recognize as
-#: complete (#4231 fix round: the impl-before-corpus rebase landing).
+#: ``spec-kitty review --mode post-merge`` can tell an anchor recorded under
+#: the operator's explicit attestation from one whose evidence it does not
+#: recognize — and refuse to report a green dead-code scan for any value it
+#: does not recognize as complete (#4231 fix rounds: the impl-before-corpus
+#: rebase landing, then the internal-merge landing).
 _PR_MERGE_EVIDENCE_FIELD = "pr_merge_evidence"
 
 #: Anchor-evidence class: the landing commit has two parents, so its first
-#: parent is the target-branch side of the merge — the pre-landing target tip
-#: by construction. Complete mission-baseline evidence, proven from git.
-ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT = "merge-commit-parent"
+#: parent is the pre-landing target tip — but only by the operator's recorded
+#: ``--attest-first-landing-commit`` attestation that the merge was performed
+#: ON the target branch. A merge performed on a mission or sibling branch and
+#: then fast-forwarded onto the target is graph-identical to a merge performed
+#: on the target (the internal-merge landing, #4231 fix round 4), so git alone
+#: cannot prove which side the target stood on.
+ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED = "merge-commit-parent-attested"
 
 #: Anchor-evidence class: the landing commit has a single parent, so git
 #: cannot prove that parent is the pre-landing target tip (a squash or
@@ -293,13 +298,15 @@ class PrMergeEvidence:
     target branch; ``baseline_merge_commit`` is that commit's first parent —
     the post-merge review anchor, the same field ``spec-kitty merge``
     records. ``anchor_evidence`` names what kind of evidence that anchor
-    rests on (:data:`ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT` — the landing
-    commit has two parents, so the first parent is the target side, the
-    pre-landing tip, by construction — or
-    :data:`ANCHOR_EVIDENCE_CORPUS_PARENT_ATTESTED` — a single-parent landing
-    whose anchor is the pre-landing tip only by the operator's recorded
-    attestation, because git cannot prove it for that shape). See the "What
-    the evidence proves" note in :func:`verify_pr_merge_evidence`.
+    rests on: :data:`ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED` (a
+    two-parent landing whose first parent is the pre-landing target tip by
+    the operator's recorded attestation that the merge was performed on the
+    target branch) or :data:`ANCHOR_EVIDENCE_CORPUS_PARENT_ATTESTED` (a
+    single-parent landing whose anchor is the pre-landing tip by the
+    operator's recorded attestation). Neither is a git proof: post-landing
+    git history cannot show which side of a landing the target branch stood
+    on. See the "What the evidence proves" note in
+    :func:`verify_pr_merge_evidence`.
     """
 
     pr_merge_commit: str
@@ -369,11 +376,13 @@ def _commit_is_on_target(repo_root: Path, commit: str, target_ref: str) -> bool:
 def _commit_is_merge(repo_root: Path, commit: str) -> bool:
     """True iff *commit* has a second parent (it is a merge commit).
 
-    A two-parent landing commit's first parent is, by construction, the
-    target-branch side of the merge — the tip the target pointed at when the
-    PR landed. That is the one landing shape for which the anchor's
-    completeness is provable from git alone; a single-parent landing commit
-    (squash or rebase replay) carries no such proof.
+    Distinguishes the two landing SHAPES for the persisted evidence class —
+    a two-parent landing's anchor is its first parent, a single-parent
+    landing's anchor is its only parent. It proves NOTHING about completeness
+    either way: a merge performed on the target branch is graph-identical to
+    a merge performed on a mission or sibling branch that was then
+    fast-forwarded onto the target, so two parents alone do not show which
+    side the target stood on (see :func:`verify_pr_merge_evidence`).
     """
     ret, _out, _err = run_command(
         ["git", "rev-parse", "--verify", "--quiet", f"{commit}^2"],
@@ -468,14 +477,25 @@ def verify_pr_merge_evidence(
 
     **What the evidence proves, and what it does not.** Checks 1–6 prove the
     commit landed on the target branch and introduced the mission corpus.
-    Whether the anchor (the first parent) is the PRE-LANDING TARGET TIP — and
-    so covers the whole mission — depends on the landing shape:
+    They do NOT prove the anchor (the first parent) is the PRE-LANDING TARGET
+    TIP — the fact that would make it cover the whole mission — for ANY
+    operator-supplied landing shape:
 
     - **Two-parent merge commit** (the landing shape ``git merge --no-ff``
       and GitHub's "Create a merge commit" produce): the first parent is the
-      target side of the merge by construction, so the anchor is COMPLETE
-      mission-baseline evidence, proven from git. The returned
-      ``anchor_evidence`` is :data:`ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT`.
+      pre-landing target tip only if the merge was performed ON the target
+      branch. A merge performed on a mission or sibling branch — the
+      internal-merge landing, where the corpus branch is merged into the
+      implementation branch and the target is then fast-forwarded to the
+      result — is graph-identical to it, and its first parent is an
+      implementation commit, so a scan anchored there silently omits the
+      implementation work. Post-landing git history cannot distinguish the
+      two, so this shape is refused unless the caller supplies
+      ``attest_first_landing=True`` (the operator's explicit attestation that
+      the merge was performed on the target branch, so the first parent is
+      the pre-landing target tip); with that attestation the returned
+      ``anchor_evidence`` is
+      :data:`ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED`.
     - **Single-parent landing commit** (squash, or a rebase-replayed corpus
       commit): the first parent is the pre-landing tip ONLY IF the supplied
       commit was the first commit of the landing (a squash contains the whole
@@ -483,17 +503,17 @@ def verify_pr_merge_evidence(
       implementation commits PRECEDED the corpus, the first parent is an
       earlier same-PR commit — graph-identical to unrelated work that landed
       on the target before the PR, so NO git check can separate the two.
-      git cannot prove completeness for this shape, so the verification
-      refuses it unless the caller supplies ``attest_first_landing=True``
-      (the operator's explicit attestation that the supplied commit was the
-      first commit of the landing); with that attestation the returned
-      ``anchor_evidence`` is :data:`ANCHOR_EVIDENCE_CORPUS_PARENT_ATTESTED`
-      and the recording persists it, so the anchor's completeness rests on a
-      recorded operator attestation, never on a claim git did not make. The
-      honest alternatives for that shape are the PR's merge commit (proven
-      complete above) or the PR's own commit list, which only forge
-      discovery can supply — that correctness work is tracked in #4277, not
-      silently skipped.
+      This shape is likewise refused unless the caller supplies
+      ``attest_first_landing=True``; with that attestation the returned
+      ``anchor_evidence`` is :data:`ANCHOR_EVIDENCE_CORPUS_PARENT_ATTESTED`.
+
+    In both cases the recording persists the attested class, so the anchor's
+    completeness rests on a recorded operator attestation, never on a claim
+    git did not make. The honest alternative that would PROVE completeness —
+    the PR's own commit list, which only forge discovery can supply — is
+    tracked in #4277, not silently skipped. (The ``spec-kitty merge`` local
+    lane needs no attestation: it captures the real target tip at merge time,
+    before any landing exists.)
     """
     assert_safe_path_segment(mission_slug)
 
@@ -546,21 +566,36 @@ def verify_pr_merge_evidence(
             "(--target-branch)"
         )
 
-    # Anchor-evidence classification (#4231 fix round). A two-parent landing
-    # commit proves its first parent is the target side — the pre-landing
-    # tip — by construction. A single-parent landing commit proves nothing of
-    # the kind: its parent is the pre-landing tip only if the supplied commit
-    # was the FIRST commit of the landing, and an earlier same-PR
-    # implementation commit is graph-identical to pre-existing target work.
-    # Recording the latter unattested would anchor the dead-code scan at the
-    # wrong tip and silently skip part of the gate, so it is refused unless
-    # the operator attests explicitly — the attestation is then named in the
-    # persisted evidence, never presented as a git proof.
-    if _commit_is_merge(repo_root, pr_merge_commit):
-        anchor_evidence = ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT
-    elif attest_first_landing:
-        anchor_evidence = ANCHOR_EVIDENCE_CORPUS_PARENT_ATTESTED
-    else:
+    # Anchor-evidence classification (#4231 fix rounds 3–4). Post-landing git
+    # history cannot prove the anchor (the first parent) is the pre-landing
+    # target tip for ANY operator-supplied landing shape: a two-parent merge
+    # performed on the target branch is graph-identical to an internal merge
+    # (corpus merged into the implementation branch, target fast-forwarded to
+    # the result), whose first parent is an implementation commit; and a
+    # single-parent landing's parent is the tip only if the supplied commit
+    # was the FIRST commit of the landing, which an earlier same-PR
+    # implementation commit is graph-identical to. Recording either unattested
+    # would anchor the dead-code scan at the wrong tip and silently skip part
+    # of the gate, so BOTH shapes are refused unless the operator attests
+    # explicitly — the attestation is then named in the persisted evidence
+    # class, never presented as a git proof.
+    is_merge = _commit_is_merge(repo_root, pr_merge_commit)
+    if not attest_first_landing:
+        if is_merge:
+            raise PrMergeEvidenceError(
+                f"commit {pr_merge_commit} is a merge commit, but two parents "
+                "alone do not prove its first parent "
+                f"{baseline_merge_commit} is the pre-landing target tip: a "
+                "merge performed on the target branch is graph-identical to "
+                "an internal merge (the corpus branch merged into the "
+                "implementation branch, the target then fast-forwarded to "
+                "the result), whose first parent is an implementation commit "
+                "— anchoring there would silently skip the dead-code gate for "
+                "that work. If this merge was performed ON the target branch, "
+                "pass --attest-first-landing-commit to record that operator "
+                "attestation. Full forge commit-list evidence is tracked in "
+                "#4277."
+            )
         raise PrMergeEvidenceError(
             f"commit {pr_merge_commit} has a single parent, so git cannot "
             f"prove its first parent {baseline_merge_commit} is the "
@@ -572,10 +607,10 @@ def verify_pr_merge_evidence(
             "dead-code scan at the wrong tip and silently skip part of the "
             "gate. If the supplied commit was the first commit of the "
             "landing, pass --attest-first-landing-commit to record that "
-            "operator attestation; otherwise supply the PR's merge commit "
-            "(a two-parent merge this seam proves completely). Full forge "
-            "commit-list evidence is tracked in #4277."
+            "operator attestation. Full forge commit-list evidence is "
+            "tracked in #4277."
         )
+    anchor_evidence = ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED if is_merge else ANCHOR_EVIDENCE_CORPUS_PARENT_ATTESTED
 
     return PrMergeEvidence(
         pr_merge_commit=pr_merge_commit,
@@ -592,11 +627,13 @@ def _stamp_pr_merge_provenance(
     """Stamp the ``pr_merge_commit`` / ``pr_merge_evidence`` provenance fields.
 
     Each field is set-once, never overwritten. ``pr_merge_evidence`` records
-    what the recorded anchor's completeness rests on — git proof
-    (:data:`ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT`) or the operator's explicit
-    attestation (:data:`ANCHOR_EVIDENCE_CORPUS_PARENT_ATTESTED`) — so
-    ``spec-kitty review --mode post-merge`` can honour it instead of
-    consuming every recorded anchor as though it were proven.
+    what the recorded anchor's completeness rests on — the operator's
+    recorded ``--attest-first-landing-commit`` attestation, either shape
+    (:data:`ANCHOR_EVIDENCE_MERGE_COMMIT_PARENT_ATTESTED` for a two-parent
+    landing, :data:`ANCHOR_EVIDENCE_CORPUS_PARENT_ATTESTED` for a
+    single-parent one) — so ``spec-kitty review --mode post-merge`` can
+    honour it instead of consuming every recorded anchor as though it were
+    proven.
     """
     try:
         meta = load_meta_fail_closed(feature_dir)
@@ -633,8 +670,8 @@ def _record_pr_merge_baseline(
     same canonical writer (:func:`record_baseline_merge_commit`) the
     local-merge path uses, never a forked one. Verifies the evidence first
     (fail loud, no fabrication — including that the commit actually landed on
-    the target branch, and that a single-parent landing carries the
-    operator's explicit first-landing attestation), then writes
+    the target branch, and that the operator's explicit first-landing
+    attestation is present for EITHER landing shape), then writes
     ``baseline_merge_commit`` = the merge commit's first parent and stamps
     :data:`_PR_MERGE_COMMIT_FIELD` = the merge commit itself plus
     :data:`_PR_MERGE_EVIDENCE_FIELD` = what the anchor's completeness rests
@@ -707,8 +744,10 @@ def record_pr_merge_baseline_for_mission(
     ``migrate backfill-merge-commit``) share: resolves the primary
     ``meta.json`` via :func:`resolve_primary_meta_dir`, then records through
     the module-private :func:`_record_pr_merge_baseline`. *attest_first_landing*
-    is the operator's explicit attestation that a single-parent landing commit
-    was the first commit of the landing — see :func:`verify_pr_merge_evidence`.
+    is the operator's explicit attestation that the supplied commit's first
+    parent is the pre-landing target tip (for a two-parent landing: the merge
+    was performed on the target branch; for a single-parent one: it was the
+    first commit of the landing) — see :func:`verify_pr_merge_evidence`.
     """
     feature_dir = resolve_primary_meta_dir(repo_root, mission_slug, effective_root=effective_root)
     return _record_pr_merge_baseline(
