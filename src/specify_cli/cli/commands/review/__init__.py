@@ -217,6 +217,7 @@ def _run_dead_code_gate(
     findings: list[dict[str, str]],
     mission_id: str | None,
     mission_slug: str,
+    acceptance_mode: str | None = None,
     gates_recorded: list[GateRecord],
 ) -> None:
     findings_before = len(findings)
@@ -227,6 +228,7 @@ def _run_dead_code_gate(
         findings,
         mission_id=mission_id,
         mission_slug=mission_slug,
+        acceptance_mode=acceptance_mode,
     )
     result: Literal["pass", "fail"] = "fail" if len(findings) > findings_before else "pass"
     _record_gate(gates_recorded, gate_id="gate_2", name="dead_code_scan", result=result)
@@ -395,6 +397,8 @@ def review_mission(
     gates_recorded: list[GateRecord] = []
     _mission_id_raw = meta.get("mission_id")
     _mission_id: str | None = str(_mission_id_raw) if _mission_id_raw else None
+    _acceptance_mode_raw = meta.get("acceptance_mode")
+    _acceptance_mode: str | None = str(_acceptance_mode_raw) if _acceptance_mode_raw else None
     _run_lane_gate(feature_dir, repo_root, console, findings, gates_recorded)
     _run_dead_code_gate(
         baseline_merge_commit=baseline_merge_commit,
@@ -403,6 +407,7 @@ def review_mission(
         findings=findings,
         mission_id=_mission_id,
         mission_slug=mission_slug,
+        acceptance_mode=_acceptance_mode,
         gates_recorded=gates_recorded,
     )
     _run_ble001_gate(repo_root, console, findings, gates_recorded)

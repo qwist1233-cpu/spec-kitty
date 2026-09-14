@@ -34,6 +34,11 @@ from specify_cli.core.owned_mission import (
 )
 from specify_cli.migration.runtime_state_cutover import MissingMissionIdError
 from specify_cli.migration.verdict_provenance_backfill import stranded_verdict_findings
+from specify_cli.merge.baseline import (
+    PrMergeEvidence,
+    PrMergeEvidenceError,
+    verify_pr_merge_evidence,
+)
 from specify_cli.upgrade.pre30_guard import Pre30LayoutError
 from specify_cli.cli import StepTracker
 from specify_cli.cli.selector_resolution import resolve_mission_handle
@@ -349,6 +354,42 @@ def _stamp_birth_cutover_for_accept(repo_root: Path, mission_slug: str, *, effec
         logger.warning(
             "birth-cutover for %s did not reconcile: %s", mission_slug, result.error
         )
+
+
+def _record_pr_merge_for_accept(
+    repo_root: Path,
+    mission_slug: str,
+    merge_commit: str,
+    *,
+    effective_root: Path | None = None,
+) -> PrMergeEvidence:
+    """Record the PR's real merge commit as the post-merge review baseline (#4231).
+
+    A mission accepted through ``--mode pr`` never passes through
+    ``spec-kitty merge``, so without this recording its ``meta.json`` never
+    carries ``baseline_merge_commit`` and both ``spec-kitty review --mode
+    post-merge`` (``MISSION_REVIEW_MODE_MISMATCH``) and the lightweight
+    dead-code gate (``dead_code_baseline_missing``) misreport a cleanly
+    merged mission. This records the merge the mission ACTUALLY had, through
+    the shared single seam
+    (:func:`specify_cli.merge.baseline.record_pr_merge_baseline_for_mission`
+    — the same one ``migrate backfill-merge-commit`` uses), which verifies the
+    commit against git before writing anything — no fabricated evidence.
+
+    Mirrors :func:`_stamp_birth_cutover_for_accept`'s placement (PRIMARY
+    ``meta.json`` via the kind-aware seam) and ordering (called before
+    :func:`_commit_residual_acceptance_artifacts` so this write is swept into
+    that same partition-aware residual commit). Unlike the birth-cutover
+    stamp it is NOT best-effort: the operator explicitly asked for the merge
+    to be recorded, so a failure propagates and the command exits non-zero
+    rather than silently landing a mission whose baseline was never recorded
+    — the exact silent-gap defect #4231 reports.
+    """
+    from specify_cli.merge.baseline import record_pr_merge_baseline_for_mission
+
+    return record_pr_merge_baseline_for_mission(
+        repo_root, mission_slug, merge_commit, effective_root=effective_root
+    )
 
 
 def _commit_primary_residuals(repo_root: Path, mission_slug: str, dirty: list[str]) -> bool:
@@ -695,6 +736,19 @@ def accept(
     owned_checkout: Annotated[
         Path | None, typer.Option("--owned-checkout", help="Explicit owned checkout for a single-branch mission.")
     ] = None,
+    merge_commit: Annotated[
+        str | None,
+        typer.Option(
+            "--merge-commit",
+            metavar="SHA",
+            help=(
+                "With --mode pr: record this PR merge commit as the mission's "
+                "post-merge review baseline. The commit is verified against git "
+                "(it must carry kitty-specs/<slug>/meta.json and its first parent "
+                "must not) before anything is written."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Validate mission readiness before merging to main."""
 
@@ -766,6 +820,34 @@ def accept(
         tracker.add("commit", "Record acceptance metadata")
     if not json_output:
         tracker.add("guide", "Share next steps" if not diagnose else "Report diagnostics")
+
+    # #4231: validate --merge-commit BEFORE any acceptance write, so a bad or
+    # unverifiable SHA fails with nothing mutated. Verification is read-only
+    # git, so --diagnose / --no-commit may carry it too.
+    pr_merge_evidence: PrMergeEvidence | None = None
+    if merge_commit is not None:
+        if actual_mode != "pr":
+            error_msg = (
+                f"--merge-commit is only valid with --mode pr (resolved mode: "
+                f"{actual_mode}). A {actual_mode} acceptance records its "
+                "baseline_merge_commit through `spec-kitty merge`, not here."
+            )
+            if json_output:
+                print(json.dumps({"error": error_msg}))
+            else:
+                console.print(f"[red]Error:[/red] {error_msg}")
+            raise typer.Exit(2)
+        try:
+            pr_merge_evidence = verify_pr_merge_evidence(
+                repo_root, mission_slug, merge_commit
+            )
+        except PrMergeEvidenceError as exc:
+            error_msg = f"Cannot record PR merge for {mission_slug}: {exc}"
+            if json_output:
+                print(json.dumps({"error": error_msg}))
+            else:
+                console.print(f"[red]Error:[/red] {error_msg}")
+            raise typer.Exit(1)
 
     if not json_output:
         tracker.start("verify")
@@ -875,6 +957,8 @@ def accept(
     _accept_exc: AcceptanceError | None = None
     _residue_exc: Exception | None = None
     _stamp_exc: Exception | None = None
+    _pr_merge_exc: Exception | None = None
+    pr_merge_recorded = False
     try:
         if commit_required and not json_output:
             tracker.start("commit")
@@ -919,6 +1003,20 @@ def accept(
                 _stamp_birth_cutover_for_accept(repo_root, mission_slug, **scope)
             except (MissingMissionIdError, AcceptanceError, ActionContextError) as stamp_exc:
                 _stamp_exc = stamp_exc
+        if commit_required and _accept_exc is None and pr_merge_evidence is not None:
+            # #4231: record the verified PR merge as the review baseline on the
+            # same real-commit, acceptance-succeeded path as the birth-cutover
+            # stamp, BEFORE the residual-artifacts commit so this meta.json
+            # write is swept into that same partition-aware commit. Unlike the
+            # stamp this is explicit operator intent, so a failure propagates
+            # to the command's exit path instead of degrading to a warning.
+            try:
+                _record_pr_merge_for_accept(
+                    repo_root, mission_slug, merge_commit or "", **scope
+                )
+                pr_merge_recorded = True
+            except Exception as pr_merge_error:  # noqa: BLE001 — reported on the command's own error lane below
+                _pr_merge_exc = pr_merge_error
         if commit_required:
             # The acceptance commit (inside perform_acceptance) only captures
             # meta.json. Derived artifacts materialized during readiness checks
@@ -939,6 +1037,13 @@ def accept(
         else:
             console.print(f"[red]Error:[/red] {error_msg}")
         raise typer.Exit(1)
+    if _pr_merge_exc is not None:
+        error_msg = f"PR merge recording failed: {_pr_merge_exc}"
+        if json_output:
+            print(json.dumps({"error": error_msg}))
+        else:
+            console.print(f"[red]Error:[/red] {error_msg}")
+        raise typer.Exit(1)
     if _residue_exc is not None:
         error_msg = f"Residual artifact commit failed: {_residue_exc}"
         if json_output:
@@ -951,6 +1056,21 @@ def accept(
         raise typer.Exit(1)
 
     assert result is not None  # guaranteed: _accept_exc is None means perform_acceptance succeeded
+
+    if pr_merge_evidence is not None:
+        # #4231: surface the PR-merge recording outcome on both output lanes
+        # (human notes and the --json payload via result.to_dict()).
+        if pr_merge_recorded:
+            result.notes.append(
+                "PR merge recorded: baseline_merge_commit "
+                f"{pr_merge_evidence.baseline_merge_commit} "
+                f"(PR merge commit {pr_merge_evidence.pr_merge_commit})"
+            )
+        else:
+            result.notes.append(
+                "--merge-commit verified against this repository; re-run "
+                "without --no-commit to record it as the review baseline"
+            )
 
     if json_output:
         print(json.dumps(_with_advisories(result.to_dict(), [provenance_note]), indent=2))

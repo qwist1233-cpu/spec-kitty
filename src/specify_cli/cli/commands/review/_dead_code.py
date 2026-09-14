@@ -201,22 +201,55 @@ def _append_undeterminable(
     )
 
 
+#: ``reason`` value on a ``dead_code_baseline_missing`` finding whose mission
+#: was accepted through a GitHub PR (``meta.json`` ``acceptance_mode: "pr"``):
+#: the missing baseline means the PR merge was never recorded, not that the
+#: mission never merged (#4231 — the two previously produced the identical
+#: verdict, so a cleanly PR-merged mission was indistinguishable from a
+#: fidelity failure).
+_REASON_PR_MERGE_UNRECORDED = "pr_accepted_merge_unrecorded"
+_REASON_NEVER_MERGED = "never_merged_via_spec_kitty_merge"
+
+_PR_MERGE_UNRECORDED_REMEDIATION = (
+    "This mission was accepted via PR (acceptance_mode: pr): the missing "
+    "baseline_merge_commit means the PR merge was never recorded, not that "
+    "the mission never merged. If the PR has merged, record the real merge "
+    "commit with `spec-kitty migrate backfill-merge-commit --mission "
+    "<slug> --merge-commit <sha>` (or re-run `spec-kitty accept --mode pr "
+    "--merge-commit <sha>`); if it has not, merge it, then rerun review "
+    "with `--mode post-merge`."
+)
+
+
 def _handle_missing_baseline(
     *,
     console: Console,
     findings: list[dict[str, str]],
     mission_id: str | None,
     mission_slug: str | None,
+    acceptance_mode: str | None = None,
 ) -> None:
     if mission_id:
-        remediation = (
-            "Run `spec-kitty merge` to bake baseline_merge_commit into meta.json, "
-            "or rerun review with `--mode post-merge` after merge."
-        )
+        # #4231: a PR-accepted mission without a baseline is a DIFFERENT state
+        # from a never-merged mission — the merge likely happened and was
+        # simply never recorded. Same verdict weight (still a hard fail: the
+        # dead-code gate cannot run), but a distinct reason + remediation so a
+        # later reader can tell the two apart without re-deriving the audit.
+        pr_accepted = (acceptance_mode or "").strip().lower() == "pr"
+        if pr_accepted:
+            reason = _REASON_PR_MERGE_UNRECORDED
+            remediation = _PR_MERGE_UNRECORDED_REMEDIATION
+        else:
+            reason = _REASON_NEVER_MERGED
+            remediation = (
+                "Run `spec-kitty merge` to bake baseline_merge_commit into meta.json, "
+                "or rerun review with `--mode post-merge` after merge."
+            )
         console.print(
             f"  [red]✗[/red]  Dead-code scan: missing baseline_merge_commit "
             f"({MissionReviewDiagnostic.LIGHTWEIGHT_REVIEW_MISSING_BASELINE})"
         )
+        console.print(f"       reason: {reason}")
         console.print(f"       remediation: {remediation}")
         findings.append(
             {
@@ -226,6 +259,7 @@ def _handle_missing_baseline(
                 ),
                 "mission_id": mission_id,
                 "mission_slug": mission_slug or "",
+                "reason": reason,
                 "remediation": remediation,
             }
         )
@@ -244,14 +278,22 @@ def scan_dead_code(
     *,
     mission_id: str | None = None,
     mission_slug: str | None = None,
+    acceptance_mode: str | None = None,
 ) -> None:
-    """Scan added public Python symbols and emit an earned review verdict."""
+    """Scan added public Python symbols and emit an earned review verdict.
+
+    ``acceptance_mode`` (from ``meta.json``) only changes the *reason* and
+    *remediation* attached to a ``dead_code_baseline_missing`` finding — never
+    the verdict itself: a missing baseline is a hard fail either way because
+    the dead-code gate cannot run without an anchor.
+    """
     if not baseline_merge_commit:
         _handle_missing_baseline(
             console=console,
             findings=findings,
             mission_id=mission_id,
             mission_slug=mission_slug,
+            acceptance_mode=acceptance_mode,
         )
         return
 

@@ -343,8 +343,19 @@ FLOOR_MARGIN = 2
 # Measured directly via
 # ``pytest tests/architectural/test_inline_meta_read_gate.py::test_routed_load_meta_floor``
 # on the PR tip.
+# RAISED 2026-09-13 (#4231): the PR-merge baseline recording path added three
+# genuine routed sites — ``load_meta_fail_closed`` in
+# ``merge.baseline._stamp_pr_merge_commit`` (the ``pr_merge_commit``
+# provenance stamp) and ``merge.baseline._record_pr_merge_baseline`` (the
+# mission_id read ahead of the canonical baseline write), plus
+# ``load_meta_fail_closed`` in the ``migrate backfill-merge-commit`` command's
+# already-recorded skip check. Live rises 157 -> 160; floor raised
+# 153 -> 156, the lowest permitted value within the four-site margin
+# (``156 <= 156 < 160``). Measured directly via
+# ``pytest tests/architectural/test_inline_meta_read_gate.py::test_routed_load_meta_floor``
+# on the PR tip.
 ROUTED_LOAD_META_FLOOR_MARGIN = 4
-ROUTED_LOAD_META_FLOOR = 153
+ROUTED_LOAD_META_FLOOR = 156
 
 
 # --------------------------------------------------------------------------- #

@@ -5,6 +5,9 @@ Subcommands:
 - ``spec-kitty migrate`` — Migrate project .kittify/ to centralized model.
 - ``spec-kitty migrate backfill-identity`` — Write ULID ``mission_id`` into
   any ``meta.json`` that lacks one.  Idempotent and non-destructive.
+- ``spec-kitty migrate backfill-merge-commit`` — Record a GitHub PR's real
+  merge commit as a mission's post-merge review baseline (#4231). Verifies
+  the commit against git before writing; idempotent.
 - ``spec-kitty migrate charter-encoding`` — Scan charter content for non-UTF-8
   encodings; normalize-or-fail-loud. Implements FR-026, FR-027, NFR-006.
 - ``spec-kitty migrate backfill-provenance`` — Stamp the ``legacy_unrecorded``
@@ -365,6 +368,158 @@ def backfill_identity(
             console.print("\n[green]Done.[/green] All missions already have a ``mission_id``.")
 
     if errored:
+        raise typer.Exit(1)
+
+
+_MERGE_COMMIT_METAVAR = "SHA"
+
+_MERGE_COMMIT_HELP = (
+    "The PR merge commit that landed the mission on its target branch. "
+    "Read it off the merged PR, then supply it here; the migration verifies "
+    "it against git before writing anything."
+)
+
+_MERGE_COMMIT_DRY_RUN_HELP = (
+    "Verify the merge evidence and report what would be written without "
+    "writing any files. The JSON shape is identical to a live run."
+)
+
+#: Command-specific --json help (``_JSON_HELP`` is worded for the runtime-state
+#: cutover's "seed/flip" results and does not describe this single-mission row).
+_MERGE_COMMIT_JSON_HELP = (
+    "Emit the per-mission backfill result row as structured JSON."
+)
+
+
+@app.command(name="backfill-merge-commit")
+def backfill_merge_commit_cmd(
+    mission: Annotated[
+        str,
+        typer.Option(
+            _MISSION_FLAG,
+            help="Mission to repair (mission_id / mid8 / slug).",
+            metavar=_MISSION_METAVAR,
+        ),
+    ],
+    merge_commit: Annotated[
+        str,
+        typer.Option(
+            "--merge-commit",
+            help=_MERGE_COMMIT_HELP,
+            metavar=_MERGE_COMMIT_METAVAR,
+        ),
+    ],
+    dry_run: Annotated[
+        bool, typer.Option(_DRY_RUN_FLAG, help=_MERGE_COMMIT_DRY_RUN_HELP)
+    ] = False,
+    json_output: Annotated[
+        bool, typer.Option(_JSON_FLAG, help=_MERGE_COMMIT_JSON_HELP)
+    ] = False,
+) -> None:
+    """Record a GitHub PR's real merge commit as a mission's review baseline (#4231).
+
+    A mission accepted through ``acceptance_mode: pr`` never passes through
+    ``spec-kitty merge``, so its ``meta.json`` never carried
+    ``baseline_merge_commit`` — leaving ``spec-kitty review --mode post-merge``
+    unreachable (``MISSION_REVIEW_MODE_MISMATCH``) and the lightweight
+    dead-code gate failing a cleanly merged mission. This command repairs
+    that state from REAL evidence: the merge commit you supply is verified
+    against git (it must resolve in this repository, carry the mission's
+    ``kitty-specs/<slug>/meta.json``, and its first parent must not — proving
+    it is the commit that landed the mission) before ``baseline_merge_commit``
+    (the first parent, the pre-landing target tip) and ``pr_merge_commit``
+    (the landing commit itself, as provenance) are written through the same
+    canonical seam ``spec-kitty merge`` and ``accept --mode pr
+    --merge-commit`` use.
+
+    **Idempotent**: a mission whose ``meta.json`` already carries a
+    ``baseline_merge_commit`` is skipped and never overwritten.
+
+    Exit codes:
+
+    - ``0`` — recorded, skipped (already recorded), or ``--dry-run``
+    - ``1`` — the merge evidence could not be verified, or the mission handle
+      is unknown
+
+    Examples:
+
+        spec-kitty migrate backfill-merge-commit --mission 321-mission --merge-commit <sha> --dry-run
+
+        spec-kitty migrate backfill-merge-commit --mission 321-mission --merge-commit <sha>
+    """
+    from specify_cli.cli.selector_resolution import resolve_mission_handle
+    from specify_cli.core.paths import MissionMetaReadError, load_meta_fail_closed
+    from specify_cli.merge.baseline import (
+        PrMergeEvidenceError,
+        record_pr_merge_baseline_for_mission,
+        resolve_primary_meta_dir,
+        verify_pr_merge_evidence,
+    )
+
+    repo_root = locate_project_root()
+    if repo_root is None:
+        _error(_NO_PROJECT_ROOT)
+        raise typer.Exit(1)
+
+    # Route --mission through the canonical handle resolver so mission_id /
+    # mid8 / slug all resolve. resolve_mission_handle prints + exits on an
+    # unknown/ambiguous handle.
+    resolved = resolve_mission_handle(mission, repo_root, json_mode=json_output)
+
+    # The skip-check reads the SAME primary leg the write targets (not the
+    # kind-blind handle dir, which can be the coordination surface).
+    primary_meta_dir = resolve_primary_meta_dir(repo_root, resolved.mission_slug)
+
+    result = {
+        "slug": resolved.mission_slug,
+        "action": "error",
+        "reason": "",
+        "pr_merge_commit": None,
+        "baseline_merge_commit": None,
+    }
+    try:
+        try:
+            working_meta = load_meta_fail_closed(primary_meta_dir) or {}
+        except MissionMetaReadError as exc:
+            raise PrMergeEvidenceError(f"meta.json is unreadable ({exc})") from exc
+        if str(working_meta.get("baseline_merge_commit") or "").strip():
+            result["action"] = "skip"
+            result["reason"] = "baseline_merge_commit already recorded"
+        else:
+            evidence = verify_pr_merge_evidence(
+                repo_root, resolved.mission_slug, merge_commit
+            )
+            result["pr_merge_commit"] = evidence.pr_merge_commit
+            result["baseline_merge_commit"] = evidence.baseline_merge_commit
+            if not dry_run:
+                record_pr_merge_baseline_for_mission(
+                    repo_root, resolved.mission_slug, merge_commit
+                )
+            result["action"] = "would_write" if dry_run else "wrote"
+            result["reason"] = (
+                "verified against git: first parent of the PR merge commit is "
+                "the pre-landing target tip"
+            )
+    except PrMergeEvidenceError as exc:
+        result["reason"] = str(exc)
+
+    if json_output:
+        print(json.dumps({"dry_run": dry_run, "results": [result]}, indent=2))
+    else:
+        prefix = "[dim](dry-run)[/dim] " if dry_run else ""
+        console.print(f"\n{prefix}[bold]backfill-merge-commit summary[/bold]")
+        console.print(f"  Mission               : {result['slug']}")
+        console.print(f"  Action                : {result['action']}")
+        if result["pr_merge_commit"]:
+            console.print(f"  PR merge commit       : {result['pr_merge_commit']}")
+            console.print(
+                f"  baseline_merge_commit : {result['baseline_merge_commit']}"
+            )
+        console.print(f"  Reason                : {result['reason']}")
+        if dry_run:
+            console.print("\n[dim]Dry run — no files were modified.[/dim]")
+
+    if result["action"] == "error":
         raise typer.Exit(1)
 
 

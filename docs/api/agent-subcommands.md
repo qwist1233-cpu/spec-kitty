@@ -600,6 +600,9 @@ _Mission lifecycle commands for AI agents_
 │ --lenient                  Skip strict metadata validation                   │
 │ --no-commit                Skip auto-commit (report only)                    │
 │ --diagnose                 Diagnose acceptance blockers without mutation     │
+│ --merge-commit       SHA   With --mode pr: record this PR merge commit as    │
+│                            the mission's post-merge review baseline          │
+│                            (#4231).                                          │
 │ --help       -h            Show this message and exit.                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```

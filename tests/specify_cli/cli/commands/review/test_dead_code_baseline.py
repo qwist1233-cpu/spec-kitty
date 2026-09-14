@@ -162,3 +162,88 @@ def test_diagnostic_code_string_is_stable() -> None:
         MissionReviewDiagnostic.LEGACY_MISSION_DEAD_CODE_SKIP.value
         == "LEGACY_MISSION_DEAD_CODE_SKIP"
     )
+
+
+# ---------------------------------------------------------------------------
+# #4231: the missing-baseline finding must distinguish a PR-accepted mission
+# (the merge likely happened and was never recorded) from a mission that never
+# merged. Same verdict weight — a hard fail either way — but distinct
+# ``reason`` + remediation so a later reader can tell the two states apart
+# without re-deriving the audit.
+# ---------------------------------------------------------------------------
+
+
+def test_pr_accepted_missing_baseline_names_pr_remediation(tmp_path: Path) -> None:
+    """Modern mission + PR acceptance + null baseline → pr_accepted_merge_unrecorded."""
+    findings: list[dict[str, str]] = []
+    console = Console(force_terminal=False, no_color=True, record=True)
+
+    scan_dead_code(
+        baseline_merge_commit=None,
+        repo_root=tmp_path,
+        console=console,
+        findings=findings,
+        mission_id="01KRKTT58XC5KR0HF523333R9S",
+        mission_slug="example-modern-mission-01KRKTT5",
+        acceptance_mode="pr",
+    )
+
+    assert len(findings) == 1, f"Expected 1 finding, got {findings!r}"
+    finding = findings[0]
+    # Verdict weight unchanged: still the same type + diagnostic code (a hard
+    # fail — the gate cannot run without an anchor).
+    assert finding["type"] == "dead_code_baseline_missing"
+    assert finding["diagnostic_code"] == "LIGHTWEIGHT_REVIEW_MISSING_BASELINE"
+    # ...but the reason and remediation name the PR-specific state and repair.
+    assert finding["reason"] == "pr_accepted_merge_unrecorded"
+    assert "acceptance_mode: pr" in finding["remediation"]
+    assert "backfill-merge-commit" in finding["remediation"]
+    output = console.export_text()
+    assert "pr_accepted_merge_unrecorded" in output
+
+
+def test_non_pr_missing_baseline_keeps_never_merged_reason(tmp_path: Path) -> None:
+    """Modern mission + local/no acceptance mode + null baseline → never_merged reason."""
+    findings: list[dict[str, str]] = []
+    console = Console(force_terminal=False, no_color=True, record=True)
+
+    for acceptance_mode in (None, "local"):
+        findings.clear()
+        scan_dead_code(
+            baseline_merge_commit=None,
+            repo_root=tmp_path,
+            console=console,
+            findings=findings,
+            mission_id="01KRKTT58XC5KR0HF523333R9S",
+            mission_slug="example-modern-mission-01KRKTT5",
+            acceptance_mode=acceptance_mode,
+        )
+
+        assert len(findings) == 1, f"Expected 1 finding, got {findings!r}"
+        finding = findings[0]
+        assert finding["type"] == "dead_code_baseline_missing"
+        assert finding["reason"] == "never_merged_via_spec_kitty_merge"
+        assert "spec-kitty merge" in finding["remediation"]
+        assert "backfill-merge-commit" not in finding["remediation"]
+
+
+def test_pr_reason_absent_when_baseline_present(tmp_path: Path) -> None:
+    """The distinction only applies to the missing-baseline path: a recorded
+    baseline on a PR-accepted mission never emits a missing-baseline finding
+    at all (the gate runs for real)."""
+    findings: list[dict[str, str]] = []
+    console = Console(force_terminal=False, no_color=True, record=True)
+
+    scan_dead_code(
+        baseline_merge_commit=None,
+        repo_root=tmp_path,
+        console=console,
+        findings=findings,
+        # No mission_id → the legacy skip path: acceptance_mode must not
+        # resurrect a modern-style finding on a legacy mission.
+        mission_id=None,
+        mission_slug="legacy-mission",
+        acceptance_mode="pr",
+    )
+
+    assert findings == []

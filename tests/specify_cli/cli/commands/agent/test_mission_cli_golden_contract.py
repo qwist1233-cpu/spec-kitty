@@ -129,7 +129,8 @@ _EXPECTED_FLAGS: dict[str, frozenset[str]] = {
     ),
     "record-analysis": frozenset({"--mission", "--input-file", "--agent", "--json"}),
     "setup-plan": frozenset({"--mission", "--json"}),
-    "accept": frozenset({"--mission", "--mode", "--json", "--lenient", "--no-commit", "--diagnose"}),
+    # `--merge-commit` added for the #4231 PR-merge baseline recording passthrough (2026-09-13)
+    "accept": frozenset({"--mission", "--mode", "--json", "--lenient", "--no-commit", "--diagnose", "--merge-commit"}),
     "merge": frozenset(
         {
             "--mission",

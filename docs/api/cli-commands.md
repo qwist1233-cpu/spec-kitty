@@ -91,6 +91,18 @@ For non-obvious runtime behaviour an operator may encounter:
 │                                                        checkout for a        │
 │                                                        single-branch         │
 │                                                        mission.              │
+│ --merge-commit                                   SHA   With --mode pr: record │
+│                                                        this PR merge commit │
+│                                                        as the mission's     │
+│                                                        post-merge review    │
+│                                                        baseline. The commit │
+│                                                        is verified against  │
+│                                                        git (it must carry   │
+│                                                        kitty-specs/<slug>/m │
+│                                                        eta.json and its     │
+│                                                        first parent must    │
+│                                                        not) before anything │
+│                                                        is written.          │
 │ --help                -h                               Show this message and │
 │                                                        exit.                 │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -2854,6 +2866,10 @@ _Migration commands: update .kittify/ layout and backfill identity fields in leg
 ╭─ Commands ───────────────────────────────────────────────────────────────────╮
 │ backfill-identity          Write a ULID mission_id into any meta.json that   │
 │                            lacks one.                                        │
+│ backfill-merge-commit      Record a GitHub PR's real merge commit as a       │
+│                            mission's post-merge review baseline (#4231).     │
+│                            Verifies the commit against git before writing;   │
+│                            idempotent.                                       │
 │ backfill-topology          Persist each legacy mission's MissionTopology     │
 │                            into its meta.json.                               │
 │ backfill-mission-type      Mint a profile-resolving ``mission_type`` into    │
@@ -2917,6 +2933,62 @@ _Migration commands: update .kittify/ layout and backfill identity fields in leg
 │ --mission          SLUG  Scope to a single mission slug (e.g. 083-foo-bar).  │
 │                          Omit to process all.                                │
 │ --help     -h            Show this message and exit.                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+## spec-kitty migrate backfill-merge-commit
+
+```
+ Usage: spec-kitty migrate backfill-merge-commit [OPTIONS]
+
+ Record a GitHub PR's real merge commit as a mission's review baseline (#4231).
+
+ A mission accepted through ``acceptance_mode: pr`` never passes through
+ ``spec-kitty merge``, so its ``meta.json`` never carried
+ ``baseline_merge_commit`` — leaving ``spec-kitty review --mode post-merge``
+ unreachable (``MISSION_REVIEW_MODE_MISMATCH``) and the lightweight
+ dead-code gate failing a cleanly merged mission. This command repairs
+ that state from REAL evidence: the merge commit you supply is verified
+ against git (it must resolve in this repository, carry the mission's
+ ``kitty-specs/<slug>/meta.json``, and its first parent must not — proving
+ it is the commit that landed the mission) before ``baseline_merge_commit``
+ (the first parent, the pre-landing target tip) and ``pr_merge_commit``
+ (the landing commit itself, as provenance) are written through the same
+ canonical seam ``spec-kitty merge`` and ``accept --mode pr
+ --merge-commit`` use.
+
+ **Idempotent**: a mission whose ``meta.json`` already carries a
+ ``baseline_merge_commit`` is skipped and never overwritten.
+
+ Exit codes:
+
+ - ``0`` — recorded, skipped (already recorded), or ``--dry-run``
+ - ``1`` — the merge evidence could not be verified, or the mission handle
+   is unknown
+
+ Examples:
+
+     spec-kitty migrate backfill-merge-commit --mission 321-mission --merge-commit <sha> --dry-run
+
+     spec-kitty migrate backfill-merge-commit --mission 321-mission --merge-commit <sha>
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --mission               HANDLE  Mission to repair (mission_id / mid8 /    │
+│                                    slug).                                    │
+│                                    [required]                                │
+│ *  --merge-commit          SHA     The PR merge commit that landed the       │
+│                                    mission on its target branch. Read it off │
+│                                    the merged PR, then supply it here; the   │
+│                                    migration verifies it against git before  │
+│                                    writing anything.                         │
+│                                    [required]                                │
+│    --dry-run                       Verify the merge evidence and report what │
+│                                    would be written without writing any      │
+│                                    files. The JSON shape is identical to a   │
+│                                    live run.                                 │
+│    --json                          Emit the per-mission backfill result row  │
+│                                    as structured JSON.                       │
+│    --help          -h              Show this message and exit.               │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
