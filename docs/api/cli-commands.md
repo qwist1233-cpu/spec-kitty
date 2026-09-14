@@ -99,10 +99,22 @@ For non-obvious runtime behaviour an operator may encounter:
 │                                                        is verified against  │
 │                                                        git (it must carry   │
 │                                                        kitty-specs/<slug>/m │
-│                                                        eta.json and its     │
-│                                                        first parent must    │
-│                                                        not) before anything │
-│                                                        is written.          │
+│                                                        eta.json, its first  │
+│                                                        parent must not, and │
+│                                                        it must have landed  │
+│                                                        on the target        │
+│                                                        branch) before      │
+│                                                        anything is         │
+│                                                        written.            │
+│ --target-branch                                 NAME  With --merge-commit:  │
+│                                                        the branch the PR    │
+│                                                        merged into (the     │
+│                                                        PR's base branch).   │
+│                                                        Defaults to the      │
+│                                                        mission's declared   │
+│                                                        target_branch, else  │
+│                                                        the repository's     │
+│                                                        primary branch.     │
 │ --help                -h                               Show this message and │
 │                                                        exit.                 │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -2950,8 +2962,10 @@ _Migration commands: update .kittify/ layout and backfill identity fields in leg
  dead-code gate failing a cleanly merged mission. This command repairs
  that state from REAL evidence: the merge commit you supply is verified
  against git (it must resolve in this repository, carry the mission's
- ``kitty-specs/<slug>/meta.json``, and its first parent must not — proving
- it is the commit that landed the mission) before ``baseline_merge_commit``
+ ``kitty-specs/<slug>/meta.json``, its first parent must not — proving it
+ is the commit that introduced the mission corpus — and it must have
+ landed on the target branch, so an unmerged mission-branch commit is
+ refused) before ``baseline_merge_commit``
  (the first parent, the pre-landing target tip) and ``pr_merge_commit``
  (the landing commit itself, as provenance) are written through the same
  canonical seam ``spec-kitty merge`` and ``accept --mode pr
@@ -2980,8 +2994,16 @@ _Migration commands: update .kittify/ layout and backfill identity fields in leg
 │                                    mission on its target branch. Read it off │
 │                                    the merged PR, then supply it here; the   │
 │                                    migration verifies it against git before  │
-│                                    writing anything.                         │
+│                                    writing anything — it must carry the      │
+│                                    mission's kitty-specs/<slug>/meta.json,   │
+│                                    its first parent must not, and it must    │
+│                                    have landed on the target branch.         │
 │                                    [required]                                │
+│    --target-branch         NAME    The branch the PR merged into (the PR's   │
+│                                    base branch), for the landing check.      │
+│                                    Defaults to the mission's declared        │
+│                                    target_branch, else the repository's      │
+│                                    primary branch.                           │
 │    --dry-run                       Verify the merge evidence and report what │
 │                                    would be written without writing any      │
 │                                    files. The JSON shape is identical to a   │

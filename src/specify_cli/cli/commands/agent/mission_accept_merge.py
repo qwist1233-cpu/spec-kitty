@@ -94,6 +94,13 @@ def accept_feature(
             help="With --mode pr: record this PR merge commit as the mission's post-merge review baseline (#4231).",
         ),
     ] = None,
+    target_branch: Annotated[
+        str | None,
+        typer.Option(
+            "--target-branch",
+            help="With --merge-commit: the branch the PR merged into. Defaults to the mission's declared target_branch, else the repository's primary branch.",
+        ),
+    ] = None,
 ) -> None:
     """Perform mission acceptance workflow.
 
@@ -134,6 +141,7 @@ def accept_feature(
             diagnose=diagnose,
             allow_fail=False,  # Agent commands use strict validation
             merge_commit=merge_commit,  # #4231: PR-merge evidence passthrough
+            target_branch=target_branch,  # #4231: PR base branch passthrough
         )
     except typer.Exit:
         # Propagate typer.Exit cleanly

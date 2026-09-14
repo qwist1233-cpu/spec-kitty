@@ -9,6 +9,9 @@ the accept-side repair:
 * ``--merge-commit`` outside ``--mode pr`` is a clean usage error (exit 2).
 * An unverifiable SHA is a clean error (exit 1) raised BEFORE any acceptance
   write — nothing is mutated on the refused paths.
+* An unmerged Specify-only branch commit is refused: first introduction is
+  not landing, so only the target-branch membership check separates it from
+  a real PR merge (#4231 monitor finding).
 * A verified merge commit is recorded into the mission's ``meta.json``
   (``baseline_merge_commit`` = the merge commit's first parent,
   ``pr_merge_commit`` = the landing commit) and the tree stays clean.
@@ -58,7 +61,7 @@ def _git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _create_pr_merged_feature(repo_root: Path) -> tuple[Path, str, str]:
+def _create_pr_merged_feature(repo_root: Path, *, merged: bool = True) -> tuple[Path, str, str]:
     """Create an accept-ready mission whose PR already merged into main.
 
     Returns ``(feature_dir, merge_commit, pre_merge_parent)``. The base
@@ -66,6 +69,11 @@ def _create_pr_merged_feature(repo_root: Path) -> tuple[Path, str, str]:
     carries the corpus; a ``--no-ff`` merge lands it on main (the PR-shaped
     merge commit); accept then runs on the mission branch, as it does in the
     elements-first programme.
+
+    With ``merged=False`` the branch is NEVER merged and the returned
+    "merge commit" is the single corpus commit on the unmerged branch — the
+    #4231 monitor repro shape: it introduces the corpus (parent lacks it) but
+    never landed on the target branch.
     """
     _git(repo_root, "init", ".")
     _git(repo_root, "config", "user.email", "test@test.com")
@@ -202,16 +210,21 @@ def _create_pr_merged_feature(repo_root: Path) -> tuple[Path, str, str]:
 
     # The PR-shaped landing on main: first parent predates the corpus.
     _git(repo_root, "checkout", "main")
-    _git(
-        repo_root,
-        "merge",
-        "--no-ff",
-        "-m",
-        f"Merge PR: land {_SLUG}",
-        _MISSION_BRANCH,
-    )
-    merge_commit = _git(repo_root, "rev-parse", "HEAD").stdout.strip()
-    pre_merge_parent = _git(repo_root, "rev-parse", "HEAD^1").stdout.strip()
+    if merged:
+        _git(
+            repo_root,
+            "merge",
+            "--no-ff",
+            "-m",
+            f"Merge PR: land {_SLUG}",
+            _MISSION_BRANCH,
+        )
+        merge_commit = _git(repo_root, "rev-parse", "HEAD").stdout.strip()
+        pre_merge_parent = _git(repo_root, "rev-parse", "HEAD^1").stdout.strip()
+    else:
+        # The unmerged branch's single corpus commit; its parent is the base.
+        merge_commit = _git(repo_root, "rev-parse", _MISSION_BRANCH).stdout.strip()
+        pre_merge_parent = _git(repo_root, "rev-parse", f"{_MISSION_BRANCH}^1").stdout.strip()
 
     # Accept runs on the mission branch (the elements-first operator flow).
     _git(repo_root, "checkout", _MISSION_BRANCH)
@@ -338,6 +351,40 @@ def test_accept_no_commit_verifies_but_does_not_write(tmp_path: Path, monkeypatc
         merge_commit=merge_commit,
     )
 
+    meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
+    assert "baseline_merge_commit" not in meta
+    assert "pr_merge_commit" not in meta
+
+
+def test_accept_unmerged_specify_commit_fails_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unmerged Specify-only branch commit is not merge evidence (#4231 monitor).
+
+    The branch's single corpus commit introduces ``meta.json`` (its parent
+    lacks it), so every first-introduction check passes — but it never landed
+    on the target branch, so the accept-side verification refuses it before
+    any acceptance write.
+    """
+    repo_root = (tmp_path / "repo").resolve()
+    repo_root.mkdir()
+    feature_dir, specify_commit, _parent = _create_pr_merged_feature(repo_root, merged=False)
+    monkeypatch.setenv("SPECIFY_REPO_ROOT", str(repo_root))
+    monkeypatch.chdir(repo_root)
+
+    with pytest.raises(typer.Exit) as exc_info:
+        accept(
+            mission=_SLUG,
+            mode="pr",
+            actor="tester",
+            test=[],
+            json_output=True,
+            lenient=False,
+            no_commit=False,
+            diagnose=False,
+            allow_fail=False,
+            merge_commit=specify_commit,
+        )
+
+    assert exc_info.value.exit_code == 1
     meta = json.loads((feature_dir / "meta.json").read_text(encoding="utf-8"))
     assert "baseline_merge_commit" not in meta
     assert "pr_merge_commit" not in meta

@@ -376,7 +376,15 @@ _MERGE_COMMIT_METAVAR = "SHA"
 _MERGE_COMMIT_HELP = (
     "The PR merge commit that landed the mission on its target branch. "
     "Read it off the merged PR, then supply it here; the migration verifies "
-    "it against git before writing anything."
+    "it against git before writing anything — it must carry the mission's "
+    "kitty-specs/<slug>/meta.json, its first parent must not, and it must "
+    "have landed on the target branch."
+)
+
+_MERGE_COMMIT_TARGET_HELP = (
+    "The branch the PR merged into (the PR's base branch), for the landing "
+    "check. Defaults to the mission's declared target_branch, else the "
+    "repository's primary branch."
 )
 
 _MERGE_COMMIT_DRY_RUN_HELP = (
@@ -409,6 +417,13 @@ def backfill_merge_commit_cmd(
             metavar=_MERGE_COMMIT_METAVAR,
         ),
     ],
+    target_branch: Annotated[
+        str | None,
+        typer.Option(
+            "--target-branch",
+            help=_MERGE_COMMIT_TARGET_HELP,
+        ),
+    ] = None,
     dry_run: Annotated[
         bool, typer.Option(_DRY_RUN_FLAG, help=_MERGE_COMMIT_DRY_RUN_HELP)
     ] = False,
@@ -425,12 +440,13 @@ def backfill_merge_commit_cmd(
     dead-code gate failing a cleanly merged mission. This command repairs
     that state from REAL evidence: the merge commit you supply is verified
     against git (it must resolve in this repository, carry the mission's
-    ``kitty-specs/<slug>/meta.json``, and its first parent must not — proving
-    it is the commit that landed the mission) before ``baseline_merge_commit``
-    (the first parent, the pre-landing target tip) and ``pr_merge_commit``
-    (the landing commit itself, as provenance) are written through the same
-    canonical seam ``spec-kitty merge`` and ``accept --mode pr
-    --merge-commit`` use.
+    ``kitty-specs/<slug>/meta.json``, its first parent must not — proving it
+    is the commit that introduced the mission corpus — and it must have
+    landed on the target branch, so an unmerged mission-branch commit is
+    refused) before ``baseline_merge_commit`` (the first parent, the
+    pre-landing target tip) and ``pr_merge_commit`` (the landing commit
+    itself, as provenance) are written through the same canonical seam
+    ``spec-kitty merge`` and ``accept --mode pr --merge-commit`` use.
 
     **Idempotent**: a mission whose ``meta.json`` already carries a
     ``baseline_merge_commit`` is skipped and never overwritten.
@@ -487,18 +503,20 @@ def backfill_merge_commit_cmd(
             result["reason"] = "baseline_merge_commit already recorded"
         else:
             evidence = verify_pr_merge_evidence(
-                repo_root, resolved.mission_slug, merge_commit
+                repo_root, resolved.mission_slug, merge_commit,
+                target_ref=target_branch,
             )
             result["pr_merge_commit"] = evidence.pr_merge_commit
             result["baseline_merge_commit"] = evidence.baseline_merge_commit
             if not dry_run:
                 record_pr_merge_baseline_for_mission(
-                    repo_root, resolved.mission_slug, merge_commit
+                    repo_root, resolved.mission_slug, merge_commit,
+                    target_ref=target_branch,
                 )
             result["action"] = "would_write" if dry_run else "wrote"
             result["reason"] = (
-                "verified against git: first parent of the PR merge commit is "
-                "the pre-landing target tip"
+                "verified against git: the commit landed on the target branch "
+                "and its first parent is the pre-landing target tip"
             )
     except PrMergeEvidenceError as exc:
         result["reason"] = str(exc)

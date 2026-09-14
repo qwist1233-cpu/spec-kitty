@@ -10,7 +10,12 @@ It also owns the PR-acceptance recording path for the same field (#4231): a
 mission accepted through a GitHub PR (``acceptance_mode: "pr"``) never passes
 through ``spec-kitty merge``, so its merge evidence is recorded here from the
 PR's real merge commit (``verify_pr_merge_evidence`` /
-``_record_pr_merge_baseline``) instead — never invented, never guessed.
+``_record_pr_merge_baseline``) instead — never invented, never guessed. The
+verification proves the commit actually landed on the target branch, not merely
+that it introduces the mission corpus: presence at the commit with absence at
+its first parent is first-introduction evidence, and an unmerged mission-branch
+commit satisfies it just as well as a real landing, so the target-branch
+membership check (``git merge-base --is-ancestor``) is what distinguishes them.
 
 ``merge/`` deliberately does NOT import ``cli.commands.merge``, so relocating
 this cluster here introduces no import cycle.
@@ -24,11 +29,12 @@ from pathlib import Path
 
 from kernel._safe_re import re
 from kernel.meta_decode import MetaDecodeError, decode_meta
-from specify_cli.core.git_ops import run_command
+from specify_cli.core.git_ops import resolve_primary_branch, run_command
 from specify_cli.core.paths import (
     MissionMetaReadError,
     assert_safe_path_segment,
     load_meta_fail_closed,
+    read_target_branch_from_meta,
 )
 from specify_cli.mission_metadata import write_meta
 
@@ -267,11 +273,13 @@ class PrMergeEvidenceError(RuntimeError):
     ``spec-kitty merge``, so the post-merge review baseline must be recorded
     from the PR's real merge commit instead. This error means the supplied
     commit does NOT prove what the caller asserted — it is not a commit in
-    this repository, it does not carry the mission's corpus, or the mission
+    this repository, it does not carry the mission's corpus, the mission
     corpus already existed at its first parent (so it is not the commit that
-    landed the mission). Recording it anyway would anchor the dead-code scan
-    at the wrong tip and silently skip part of the gate, so the recording
-    refuses loudly instead.
+    landed the mission), or it never landed on the target branch (an unmerged
+    mission-branch commit satisfies every first-introduction check, so only
+    the target-branch membership check separates it from a real landing).
+    Recording it anyway would anchor the dead-code scan at the wrong tip and
+    silently skip part of the gate, so the recording refuses loudly instead.
     """
 
 
@@ -319,10 +327,89 @@ def _commit_has_mission_meta(repo_root: Path, commit: str, mission_slug: str) ->
     return int(ret) == 0
 
 
+def _commit_has_mission_dir(repo_root: Path, commit: str, mission_slug: str) -> bool:
+    """True iff the ``kitty-specs/<slug>/`` tree exists at *commit* at all.
+
+    Wider than :func:`_commit_has_mission_meta`: a commit can carry part of
+    the mission corpus (``spec.md``, tasks, contracts) without ``meta.json``
+    yet — the staged-corpus shape. Anchoring a baseline at the parent of such
+    a landing would diff past the already-landed part of the mission, so the
+    verifier refuses it, not just the meta.json-only re-landing.
+    """
+    mission_dir = f"kitty-specs/{mission_slug}"
+    ret, _out, _err = run_command(
+        ["git", "cat-file", "-e", f"{commit}:{mission_dir}"],
+        capture=True,
+        check_return=False,
+        cwd=repo_root,
+    )
+    return int(ret) == 0
+
+
+def _commit_is_on_target(repo_root: Path, commit: str, target_ref: str) -> bool:
+    """True iff *commit* is an ancestor of *target_ref* — it landed there."""
+    ret, _out, _err = run_command(
+        ["git", "merge-base", "--is-ancestor", commit, target_ref],
+        capture=True,
+        check_return=False,
+        cwd=repo_root,
+    )
+    return int(ret) == 0
+
+
+def _resolve_pr_target_ref(
+    repo_root: Path,
+    mission_slug: str,
+    target_ref: str | None,
+) -> str:
+    """Resolve the branch the PR merged INTO, for the landing check.
+
+    An explicitly supplied *target_ref* wins (shape-guarded: a value
+    beginning with ``-`` would be parsed as a git option). Otherwise the
+    mission's own declared ``target_branch`` from its primary ``meta.json``
+    (the PR base is the mission's landing target), and finally the
+    repository's primary branch with the feature-branch bias OFF — a checkout
+    standing on a mission branch must never be mistaken for the landing
+    target.
+    """
+    if target_ref is not None:
+        supplied = target_ref.strip()
+        if not supplied:
+            raise PrMergeEvidenceError("the supplied target branch is empty")
+        if supplied.startswith("-"):
+            raise PrMergeEvidenceError(
+                f"{supplied!r} is not a branch name (it looks like a git option)"
+            )
+        return supplied
+    try:
+        declared = read_target_branch_from_meta(
+            resolve_primary_meta_dir(repo_root, mission_slug)
+        )
+    except MissionMetaReadError as exc:
+        raise PrMergeEvidenceError(
+            f"cannot read mission {mission_slug}'s declared target branch "
+            f"to verify the PR landing ({exc})."
+        ) from exc
+    if declared:
+        if declared.startswith("-"):
+            raise PrMergeEvidenceError(
+                f"mission {mission_slug}'s declared target_branch "
+                f"{declared!r} is not a branch name"
+            )
+        # str() pins the adapter's documented ``str | None`` contract for the
+        # narrow mypy check (cross-module ``specify_cli.*`` imports resolve as
+        # Any there), the same idiom ``_rev_verify`` uses on ``run_command``
+        # output.
+        return str(declared)
+    return str(resolve_primary_branch(repo_root, bias=False))
+
+
 def verify_pr_merge_evidence(
     repo_root: Path,
     mission_slug: str,
     merge_commit: str,
+    *,
+    target_ref: str | None = None,
 ) -> PrMergeEvidence:
     """Verify a supplied commit is the genuine PR landing commit for one mission.
 
@@ -330,7 +417,7 @@ def verify_pr_merge_evidence(
     ``spec-kitty review --mode post-merge``'s dead-code scan: a wrong anchor
     silently skips part of the scan, which is worse than refusing. The value
     must first be a hexadecimal SHA (never a ref or an option-looking string),
-    then four read-only git facts, never heuristics:
+    then five read-only git facts, never heuristics:
 
     1. ``merge_commit`` resolves to a real commit in this repository.
     2. The mission's ``kitty-specs/<slug>/meta.json`` exists AT the commit —
@@ -341,11 +428,32 @@ def verify_pr_merge_evidence(
        the pre-landing target tip. This also rejects the common operator
        mistake of supplying the mission branch head: its parent already
        contains the mission.
+    5. The mission's ``kitty-specs/<slug>/`` directory does not exist at the
+       first parent AT ALL — no part of the corpus (``spec.md``, tasks,
+       contracts) landed earlier. A staged corpus whose ``meta.json`` arrives
+       after its siblings would otherwise anchor the diff past the
+       already-landed part and silently skip the gate for it.
+    6. The commit IS on the target branch (``git merge-base --is-ancestor``)
+       — it landed there. Checks 2–5 alone prove first introduction, not
+       landing: an unmerged mission-branch commit that introduces the corpus
+       satisfies every one of them, so this membership check is what actually
+       distinguishes a landed PR merge from an unmerged branch commit.
 
     Check 4 refuses a partial re-landing (the mission dir already existed at
     the parent) on purpose: in that case a diff anchored at the parent would
     not cover the earlier-landed part of the mission, so recording it would
     skip the gate rather than run it.
+
+    *target_ref* names the branch the PR merged INTO for check 6: an explicit
+    value wins (``main``, ``origin/main``, ``refs/heads/main`` — anything
+    rev-parse resolves), else the mission's declared ``target_branch``, else
+    the repository's primary branch. One shape is knowingly NOT provable from
+    git alone: a rebase-style landing whose commits BEFORE the corpus
+    introduced the mission's implementation outside ``kitty-specs/`` — those
+    earlier commits are indistinguishable from unrelated work without the PR's
+    own metadata (the #4277 forge-discovery follow-up), so the operator must
+    supply the corpus-introducing commit and the anchor is honest about
+    covering from there.
     """
     assert_safe_path_segment(mission_slug)
 
@@ -380,6 +488,31 @@ def verify_pr_merge_evidence(
             "commit that introduced the mission corpus on the target branch"
         )
 
+    if _commit_has_mission_dir(repo_root, baseline_merge_commit, mission_slug):
+        raise PrMergeEvidenceError(
+            f"commit {pr_merge_commit} is not the landing commit for mission "
+            f"{mission_slug}: kitty-specs/{mission_slug}/ already exists at "
+            f"its first parent {baseline_merge_commit} (staged corpus — part "
+            "of the mission landed before its meta.json). Anchoring there "
+            "would skip the gate for the already-landed part; supply the "
+            "commit that introduced the mission corpus"
+        )
+
+    resolved_target = _resolve_pr_target_ref(repo_root, mission_slug, target_ref)
+    _rev_verify(
+        repo_root, f"{resolved_target}^{{commit}}"
+    )  # a missing/unfetched target branch is its own clean refusal
+    if not _commit_is_on_target(repo_root, pr_merge_commit, resolved_target):
+        raise PrMergeEvidenceError(
+            f"commit {pr_merge_commit} is not on target branch "
+            f"{resolved_target!r}: it never landed there. Supply the commit "
+            f"that landed mission {mission_slug} on {resolved_target} — the "
+            "merge or squash commit shown on the merged PR. If the landing "
+            f"is newer than this checkout, fetch {resolved_target} first; "
+            "if the PR targeted a different branch, pass it explicitly "
+            "(--target-branch)"
+        )
+
     return PrMergeEvidence(
         pr_merge_commit=pr_merge_commit,
         baseline_merge_commit=baseline_merge_commit,
@@ -412,6 +545,8 @@ def _record_pr_merge_baseline(
     repo_root: Path,
     mission_slug: str,
     merge_commit: str,
+    *,
+    target_ref: str | None = None,
 ) -> PrMergeEvidence:
     """Record a verified PR merge as the mission's post-merge review baseline.
 
@@ -421,15 +556,18 @@ def _record_pr_merge_baseline(
     backfill-merge-commit``) delegates to, so the field is written through the
     same canonical writer (:func:`record_baseline_merge_commit`) the
     local-merge path uses, never a forked one. Verifies the evidence first
-    (fail loud, no fabrication), then writes ``baseline_merge_commit`` = the
-    merge commit's first parent and stamps :data:`_PR_MERGE_COMMIT_FIELD` =
+    (fail loud, no fabrication — including that the commit actually landed on
+    the target branch), then writes ``baseline_merge_commit`` = the merge
+    commit's first parent and stamps :data:`_PR_MERGE_COMMIT_FIELD` =
     the merge commit itself as provenance.
 
     Idempotent with respect to an existing baseline:
     :func:`record_baseline_merge_commit` never overwrites a recorded value,
     so a re-run against an already-recorded mission leaves it byte-stable.
     """
-    evidence = verify_pr_merge_evidence(repo_root, mission_slug, merge_commit)
+    evidence = verify_pr_merge_evidence(
+        repo_root, mission_slug, merge_commit, target_ref=target_ref
+    )
 
     try:
         meta = load_meta_fail_closed(feature_dir)
@@ -482,8 +620,9 @@ def record_pr_merge_baseline_for_mission(
     merge_commit: str,
     *,
     effective_root: Path | None = None,
+    target_ref: str | None = None,
 ) -> PrMergeEvidence:
-    """Record a verified PR merge as the mission's baseline, on the PRIMARY leg.
+    """Record a verified PR merge as a mission's baseline, on the PRIMARY leg.
 
     The mission-level entry point both callers (``accept --merge-commit`` and
     ``migrate backfill-merge-commit``) share: resolves the primary
@@ -493,7 +632,9 @@ def record_pr_merge_baseline_for_mission(
     feature_dir = resolve_primary_meta_dir(
         repo_root, mission_slug, effective_root=effective_root
     )
-    return _record_pr_merge_baseline(feature_dir, repo_root, mission_slug, merge_commit)
+    return _record_pr_merge_baseline(
+        feature_dir, repo_root, mission_slug, merge_commit, target_ref=target_ref
+    )
 
 
 __all__ = [

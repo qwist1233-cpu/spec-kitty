@@ -362,6 +362,7 @@ def _record_pr_merge_for_accept(
     merge_commit: str,
     *,
     effective_root: Path | None = None,
+    target_ref: str | None = None,
 ) -> PrMergeEvidence:
     """Record the PR's real merge commit as the post-merge review baseline (#4231).
 
@@ -388,7 +389,11 @@ def _record_pr_merge_for_accept(
     from specify_cli.merge.baseline import record_pr_merge_baseline_for_mission
 
     return record_pr_merge_baseline_for_mission(
-        repo_root, mission_slug, merge_commit, effective_root=effective_root
+        repo_root,
+        mission_slug,
+        merge_commit,
+        effective_root=effective_root,
+        target_ref=target_ref,
     )
 
 
@@ -744,8 +749,20 @@ def accept(
             help=(
                 "With --mode pr: record this PR merge commit as the mission's "
                 "post-merge review baseline. The commit is verified against git "
-                "(it must carry kitty-specs/<slug>/meta.json and its first parent "
-                "must not) before anything is written."
+                "before anything is written — it must carry "
+                "kitty-specs/<slug>/meta.json, its first parent must not, and it "
+                "must have landed on the target branch."
+            ),
+        ),
+    ] = None,
+    target_branch: Annotated[
+        str | None,
+        typer.Option(
+            "--target-branch",
+            help=(
+                "With --merge-commit: the branch the PR merged into (the PR's "
+                "base branch). Defaults to the mission's declared target_branch, "
+                "else the repository's primary branch."
             ),
         ),
     ] = None,
@@ -839,7 +856,7 @@ def accept(
             raise typer.Exit(2)
         try:
             pr_merge_evidence = verify_pr_merge_evidence(
-                repo_root, mission_slug, merge_commit
+                repo_root, mission_slug, merge_commit, target_ref=target_branch
             )
         except PrMergeEvidenceError as exc:
             error_msg = f"Cannot record PR merge for {mission_slug}: {exc}"
@@ -1012,7 +1029,11 @@ def accept(
             # to the command's exit path instead of degrading to a warning.
             try:
                 _record_pr_merge_for_accept(
-                    repo_root, mission_slug, merge_commit or "", **scope
+                    repo_root,
+                    mission_slug,
+                    merge_commit or "",
+                    target_ref=target_branch,
+                    **scope,
                 )
                 pr_merge_recorded = True
             except Exception as pr_merge_error:  # noqa: BLE001 — reported on the command's own error lane below

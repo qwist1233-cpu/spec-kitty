@@ -603,6 +603,10 @@ _Mission lifecycle commands for AI agents_
 │ --merge-commit       SHA   With --mode pr: record this PR merge commit as    │
 │                            the mission's post-merge review baseline          │
 │                            (#4231).                                          │
+│ --target-branch      NAME  With --merge-commit: the branch the PR merged     │
+│                            into (the PR's base branch). Defaults to the      │
+│                            mission's declared target_branch, else the        │
+│                            repository's primary branch.                      │
 │ --help       -h            Show this message and exit.                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
