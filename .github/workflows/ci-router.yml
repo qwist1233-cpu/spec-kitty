@@ -43,39 +43,42 @@ jobs:
   # ---------------------------------------------------------------------------
   # changes: the two-authority router's authority #1 (path -> group). The dorny
   # filter block maps each group to its globs; the outputs fold in run-all
-  # (full mode / push) and the FR-004 fail-closed `unmatched` catch-all.
+  # (full mode) and the FR-004 fail-closed `unmatched` catch-all. Push-to-main
+  # is diff-based exactly like a PR (mission ci-modules-diff-scoping) -- the
+  # nightly full-module-matrix run (ci-nightly.yml) is the cross-module
+  # post-merge safety net that replaces the old push-always-full-scope.
   # ---------------------------------------------------------------------------
   changes:
     runs-on: ubuntu-latest
     outputs:
-      merge: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.merge }}
-      missions: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.missions }}
-      post_merge: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.post_merge }}
-      release: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.release }}
-      status: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.status }}
-      review: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.review }}
-      next: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.next }}
-      lanes: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.lanes }}
-      dashboard: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.dashboard }}
-      upgrade: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.upgrade }}
-      cli: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.cli }}
-      charter: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.charter }}
-      agent: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.agent }}
-      kernel: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.kernel }}
-      glossary: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.glossary }}
-      execution_context: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.execution_context }}
-      core_misc: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.core_misc }}
+      merge: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.merge }}
+      missions: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.missions }}
+      post_merge: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.post_merge }}
+      release: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.release }}
+      status: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.status }}
+      review: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.review }}
+      next: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.next }}
+      lanes: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.lanes }}
+      dashboard: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.dashboard }}
+      upgrade: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.upgrade }}
+      cli: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.cli }}
+      charter: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.charter }}
+      agent: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.agent }}
+      kernel: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.kernel }}
+      glossary: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.glossary }}
+      execution_context: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.execution_context }}
+      core_misc: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.core_misc }}
       # Test-inventory groups (mission sonar-per-pr-coverage-reuse-01M2FR32,
       # WP02): src-backed like every row above -- their roots are a verbatim
       # SUBSET of globs other groups already own, so they add no new path->group
       # match and belong in the unmatched union and the heavy battery's `if:`.
-      unit: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.unit }}
-      specify_cli_runtime: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.specify_cli_runtime }}
+      unit: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.unit }}
+      specify_cli_runtime: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.specify_cli_runtime }}
       # Non-src groups (data, not code): docs/corpus/e2e mirror the src rows'
       # fold shape but are DELIBERATELY excluded from the unmatched loop below.
-      docs: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.docs }}
-      corpus: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.corpus }}
-      e2e: ${{ (inputs.mode == 'full' || github.event_name == 'push' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.e2e }}
+      docs: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.docs }}
+      corpus: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.corpus }}
+      e2e: ${{ (inputs.mode == 'full' || steps.unmatched.outputs.unmatched == 'true') && 'true' || steps.filter.outputs.e2e }}
       # Raw fail-closed catch-all signal (FR-004): any src/** changed but no named src group did.
       unmatched: ${{ steps.unmatched.outputs.unmatched }}
     steps:

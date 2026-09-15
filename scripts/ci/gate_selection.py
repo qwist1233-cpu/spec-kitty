@@ -36,6 +36,7 @@ __all__ = [
     "Router",
     "load_router",
     "select_gates",
+    "select_modules",
 ]
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -158,3 +159,36 @@ def select_gates(
         selected_jobs=router.always_on_jobs | gated_selected,
         selected_code_shards=gated_selected & router.code_shard_jobs,
     )
+
+
+def select_modules(
+    changed_paths: Iterable[str | Path],
+    *,
+    router: Router | None = None,
+    mode: str = "pr",
+) -> frozenset[str]:
+    """Return which module-registry rows (``.github/ci-module-registry.yml``
+    ``modules[].module``) a changed-path set selects.
+
+    The registry's 19 module names are exactly the router's SRC-BACKED routing
+    groups (verified 1:1: merge, missions, post_merge, release, status,
+    review, next, lanes, dashboard, upgrade, cli, charter, agent, kernel,
+    glossary, execution_context, core_misc, unit, specify_cli_runtime) —
+    ``docs``/``corpus``/``e2e`` are non-src routing groups with no registry
+    row and are excluded. This reuses :func:`select_gates` rather than
+    re-deriving the module set from a second map (the #2476 hazard this
+    authority exists to close).
+
+    ``mode="full"`` or a fail-closed unmatched ``src/**`` diff (FR-004) selects
+    every module — run-all, never a silent narrowing of the matrix. Otherwise
+    only the matched src-backed groups are selected (a docs-only diff selects
+    zero modules; overlapping glob ownership between groups, e.g.
+    ``core_misc``/``unit``/``execution_context`` each also owning
+    ``src/specify_cli/status/**``, is preserved exactly as the router already
+    encodes it — never narrowed to a single "owning" module).
+    """
+    router = router or load_router()
+    selection = select_gates(changed_paths, router=router, mode=mode)
+    if mode == "full" or selection.unmatched_src:
+        return router.src_backed_groups
+    return selection.matched_groups & router.src_backed_groups

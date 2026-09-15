@@ -189,3 +189,25 @@ def test_guards_are_non_vacuous() -> None:
 
     # Sanity: the probe group is never a routing group (guards exclude it).
     assert PROBE_GROUPS.isdisjoint(router.routing_groups)
+
+
+# ---------------------------------------------------------------------------
+# (4) push-is-diff-based (mission ci-modules-diff-scoping): pin the removal of
+# the old `github.event_name == 'push' ||` run-all clause from every
+# `changes.outputs.*` expression, so push-to-main stays path-scoped like a PR
+# and cannot silently regress back to always-full-scope. The nightly full
+# module-matrix run (ci-nightly.yml) is the cross-module post-merge safety net
+# that replaced push-always-full-scope.
+# ---------------------------------------------------------------------------
+def test_changes_outputs_never_force_run_all_on_push() -> None:
+    """`changes.outputs.*` must only fold in run-all for `inputs.mode == 'full'`
+    or the FR-004 fail-closed `unmatched` catch-all -- never for
+    `github.event_name == 'push'`. A reintroduction of that clause would make
+    every push-to-main run the full module matrix again, defeating the
+    diff-based scoping this guard pins."""
+    workflow = _router_workflow()
+    outputs = workflow["jobs"]["changes"]["outputs"]
+    routing_groups_outputs = {name: expr for name, expr in outputs.items() if name != "unmatched"}
+    assert routing_groups_outputs, "expected at least one routing-group output to check"
+    offenders = {name: expr for name, expr in routing_groups_outputs.items() if "github.event_name" in str(expr) and "push" in str(expr)}
+    assert not offenders, f"changes.outputs must not force run-all on push (mission ci-modules-diff-scoping) -- offending outputs: {offenders}"

@@ -32,6 +32,7 @@ error.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -377,13 +378,22 @@ def _run_reconcile_script(
     current: dict[str, bytes],
     previous: dict[str, bytes],
     registry_rows: list[dict[str, Any]],
+    selected: list[str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     """Run the REAL shipped reconcile script in a scratch cwd, returning
-    ``(completed_process, github_output_contents)``."""
+    ``(completed_process, github_output_contents)``.
+
+    ``selected`` (mission ci-modules-diff-scoping, Approach C), when given,
+    writes ``out/aggregate/selected/selected-modules.json`` -- the diff-scoped
+    module set the triggering "CI Modules" run resolved. Omitted (``None``)
+    leaves that file absent entirely, matching a legacy/pre-feature run or a
+    download failure -- the shipped script's documented fallback ("no
+    selection info known" -> every missing shard is fallback-eligible)."""
     workdir = tmp_path / "workdir"
     current_dir = workdir / "out" / "aggregate" / "current"
     previous_dir = workdir / "out" / "aggregate" / "previous"
     github_dir = workdir / "out" / "aggregate" / "source"
+    selected_dir = workdir / "out" / "aggregate" / "selected"
     for directory in (current_dir, previous_dir, github_dir):
         directory.mkdir(parents=True, exist_ok=True)
     for name, content in current.items():
@@ -391,6 +401,9 @@ def _run_reconcile_script(
     for name, content in previous.items():
         (previous_dir / name).write_bytes(content)
     (github_dir / "ci-module-registry.yml").write_text(yaml.safe_dump({"modules": registry_rows}), encoding="utf-8")
+    if selected is not None:
+        selected_dir.mkdir(parents=True, exist_ok=True)
+        (selected_dir / "selected-modules.json").write_text(json.dumps(selected), encoding="utf-8")
 
     script_path = tmp_path / "reconcile_extracted.py"
     script_path.write_text(_reconcile_script_source(), encoding="utf-8")
@@ -481,6 +494,115 @@ def test_shipped_reconcile_script_fails_loudly_when_shard_missing_from_both_runs
     assert parsed.get("complete") == "false", github_output
     assert parsed.get("missing") == _MERGE_BASENAME, github_output
     assert "missing from BOTH" in completed.stdout, completed.stdout
+
+
+# ---------------------------------------------------------------------------
+# Mission ci-modules-diff-scoping (Approach C): selection-aware backfill.
+#
+# ci-modules.yml no longer runs every registry module on every diff -- a
+# module diff-scoping did not SELECT gets a SKIPPED leaf, never a fresh
+# coverage file. The reconciler above must therefore distinguish:
+#   * a SELECTED (changed) module missing from `current` -> fail closed, NEVER
+#     served stale from `previous`, even when `previous` has it (a genuine
+#     shard failure must never be masked by old green);
+#   * an UNSELECTED (unchanged, provably byte-identical to the fallback
+#     source) module missing from `current` -> backfill from `previous` is
+#     safe and expected -- this is the ordinary, common case for a scoped PR.
+# When no selection info is available at all (``selected=None`` -- a
+# legacy/pre-feature run or a download failure), every missing shard remains
+# fallback-eligible, exactly like the pre-Approach-C tests above.
+# ---------------------------------------------------------------------------
+def test_shipped_reconcile_script_backfills_an_unselected_module_from_previous(tmp_path: Path) -> None:
+    """An UNSELECTED module (not in the diff-scoped selected set) missing from
+    `current` is safely served from `previous` -- the ordinary scoped-PR case."""
+    completed, github_output = _run_reconcile_script(
+        tmp_path,
+        current={_MERGE_BASENAME: b"CURRENT-MERGE"},
+        previous={_MISSIONS_BASENAME: b"PREVIOUS-MISSIONS-UNCHANGED"},
+        registry_rows=[_MERGE_ROW, _MISSIONS_ROW],
+        selected=["merge"],
+    )
+    assert completed.returncode == 0, f"an unselected module must still backfill cleanly:\n{completed.stdout}\n{completed.stderr}"
+    parsed = _parse_github_output(github_output)
+    assert parsed.get("complete") == "true", github_output
+
+    resolved_dir = tmp_path / "workdir" / "out" / "aggregate" / "coverage"
+    assert (resolved_dir / _MERGE_BASENAME).read_bytes() == b"CURRENT-MERGE"
+    assert (resolved_dir / _MISSIONS_BASENAME).read_bytes() == b"PREVIOUS-MISSIONS-UNCHANGED"
+
+
+def test_shipped_reconcile_script_refuses_to_backfill_a_selected_module_even_when_previous_has_it(tmp_path: Path) -> None:
+    """A SELECTED (changed) module missing from `current` must fail closed --
+    it must NEVER be silently served stale data from `previous`, even when
+    `previous` genuinely has a coverage file for it. This is the Approach C
+    guarantee: a real shard failure on a changed module can never be masked
+    by old green."""
+    completed, github_output = _run_reconcile_script(
+        tmp_path,
+        current={},
+        previous={_MERGE_BASENAME: b"STALE-MERGE-MUST-NOT-WIN"},
+        registry_rows=[_MERGE_ROW],
+        selected=["merge"],
+    )
+    assert completed.returncode != 0, f"a selected module missing from current must fail closed, got exit 0:\n{completed.stdout}"
+    parsed = _parse_github_output(github_output)
+    assert parsed.get("complete") == "false", github_output
+    assert parsed.get("missing") == _MERGE_BASENAME, github_output
+
+    resolved_dir = tmp_path / "workdir" / "out" / "aggregate" / "coverage"
+    assert not (resolved_dir / _MERGE_BASENAME).exists(), "a selected-but-missing module must never be resolved from the stale fallback"
+
+
+def test_shipped_reconcile_script_falls_back_for_every_module_when_selection_info_is_absent(tmp_path: Path) -> None:
+    """No `selected-modules.json` at all (legacy/pre-feature run, or a failed
+    artifact download) -> every missing shard remains fallback-eligible,
+    identical to the pre-Approach-C behavior (the ``selected=None`` case)."""
+    completed, github_output = _run_reconcile_script(
+        tmp_path,
+        current={},
+        previous={_MERGE_BASENAME: b"PREVIOUS-MERGE"},
+        registry_rows=[_MERGE_ROW],
+        selected=None,
+    )
+    assert completed.returncode == 0, f"with no selection info every missing shard must still be fallback-eligible:\n{completed.stdout}\n{completed.stderr}"
+    parsed = _parse_github_output(github_output)
+    assert parsed.get("complete") == "true", github_output
+    resolved_dir = tmp_path / "workdir" / "out" / "aggregate" / "coverage"
+    assert (resolved_dir / _MERGE_BASENAME).read_bytes() == b"PREVIOUS-MERGE"
+
+
+def test_shipped_reconcile_script_ignores_a_malformed_selected_modules_file(tmp_path: Path) -> None:
+    """A corrupt/malformed selected-modules.json must never crash the job --
+    it degrades to "no selection info known" (fallback-eligible for all),
+    the same fail-safe default as a missing file."""
+    workdir = tmp_path / "workdir"
+    current_dir = workdir / "out" / "aggregate" / "current"
+    previous_dir = workdir / "out" / "aggregate" / "previous"
+    github_dir = workdir / "out" / "aggregate" / "source"
+    selected_dir = workdir / "out" / "aggregate" / "selected"
+    for directory in (current_dir, previous_dir, github_dir, selected_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+    (previous_dir / _MERGE_BASENAME).write_bytes(b"PREVIOUS-MERGE")
+    (github_dir / "ci-module-registry.yml").write_text(yaml.safe_dump({"modules": [_MERGE_ROW]}), encoding="utf-8")
+    (selected_dir / "selected-modules.json").write_text("{not valid json", encoding="utf-8")
+
+    script_path = tmp_path / "reconcile_extracted.py"
+    script_path.write_text(_reconcile_script_source(), encoding="utf-8")
+    output_path = tmp_path / "github_output.txt"
+    output_path.write_text("", encoding="utf-8")
+    env = dict(os.environ)
+    env["GITHUB_OUTPUT"] = str(output_path)
+    completed = subprocess.run(
+        [sys.executable, str(script_path)],
+        cwd=workdir,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, f"a malformed selected-modules.json must degrade to fallback-eligible, never crash:\n{completed.stdout}\n{completed.stderr}"
+    parsed = _parse_github_output(output_path.read_text(encoding="utf-8"))
+    assert parsed.get("complete") == "true", output_path.read_text(encoding="utf-8")
 
 
 def test_shipped_reconcile_script_rejects_same_run_basename_collision(tmp_path: Path) -> None:

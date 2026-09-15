@@ -27,6 +27,7 @@ from scripts.ci.gate_selection import (
     Router,
     load_router,
     select_gates,
+    select_modules,
 )
 
 pytestmark = pytest.mark.architectural
@@ -145,3 +146,50 @@ def test_gate_selection_returns_typed_result(router: Router) -> None:
     assert isinstance(selection, GateSelection)
     assert isinstance(selection.selected_jobs, frozenset)
     assert isinstance(selection.selected_code_shards, frozenset)
+
+
+# ---------------------------------------------------------------------------
+# select_modules (mission ci-modules-diff-scoping) — the module-matrix twin
+# of select_gates, reusing it rather than re-deriving a second map.
+# ---------------------------------------------------------------------------
+def test_select_modules_full_mode_selects_all_registry_modules(router: Router) -> None:
+    """FR-018/FR-019: mode="full" selects every module — run-all, never a
+    quiet narrowing of the matrix, even for a docs-only diff."""
+    selected = select_modules(["docs/x.md"], router=router, mode="full")
+    assert selected == router.src_backed_groups
+    assert len(selected) == 19
+
+
+def test_select_modules_unmatched_src_forces_all_registry_modules(router: Router) -> None:
+    """FR-004 fail-closed: an unmapped src/** change selects every module."""
+    selected = select_modules(["src/specify_cli/__unmapped_probe__/thing.py"], router=router)
+    assert selected == router.src_backed_groups
+
+
+def test_select_modules_single_src_group_selects_only_that_module(router: Router) -> None:
+    """A change confined to one src group selects exactly that module."""
+    selected = select_modules(["src/specify_cli/merge/executor.py"], router=router)
+    assert selected == frozenset({"merge"})
+
+
+def test_select_modules_docs_only_selects_zero_modules(router: Router) -> None:
+    """NFR-002 twin: a docs-only diff selects no module-registry rows."""
+    selected = select_modules(["docs/architecture/status-model.md"], router=router)
+    assert selected == frozenset()
+
+
+def test_select_modules_multi_group_diff_selects_each_matched_module(router: Router) -> None:
+    """A status/** change also selects every OTHER module whose registry roots
+    overlap it (core_misc/unit/execution_context all own
+    src/specify_cli/status/** too) — select_modules preserves the router's
+    real overlapping ownership, never narrows to a single "owning" module."""
+    selected = select_modules(
+        ["src/specify_cli/merge/executor.py", "src/specify_cli/status/store.py"],
+        router=router,
+    )
+    assert selected == frozenset({"merge", "status", "core_misc", "unit", "execution_context"})
+
+
+def test_select_modules_returns_frozenset(router: Router) -> None:
+    selected = select_modules(["docs/x.md"], router=router)
+    assert isinstance(selected, frozenset)
