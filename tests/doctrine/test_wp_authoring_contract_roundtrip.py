@@ -62,15 +62,19 @@ TASK_PROMPT_TEMPLATE = SOFTWARE_DEV_ROOT / "templates" / "task-prompt-template.m
 DOCUMENTATION_TASK_PROMPT_TEMPLATE = (
     BUILT_IN_MISSIONS_ROOT / "documentation" / "templates" / "task-prompt-template.md"
 )
+RESEARCH_TASK_PROMPT_TEMPLATE = (
+    BUILT_IN_MISSIONS_ROOT / "research" / "templates" / "task-prompt-template.md"
+)
 
 # Every bundled mission whose WP prompts /spec-kitty.tasks authors from a
 # task-prompt-template.md must declare the same ownership contract (#3795: the
-# documentation copy had none of it while software-dev had all of it). The
-# research mission's template is not yet in this map — its copy still omits the
-# contract and is tracked as #4060.
+# documentation copy had none of it while software-dev had all of it; #4060: the
+# research copy had none of it either). Add a mission here as soon as it ships a
+# task-prompt-template.md, so the ratchet covers every shipped copy.
 TASK_PROMPT_TEMPLATES = {
     "software-dev": TASK_PROMPT_TEMPLATE,
     "documentation": DOCUMENTATION_TASK_PROMPT_TEMPLATE,
+    "research": RESEARCH_TASK_PROMPT_TEMPLATE,
 }
 
 # The four ownership-contract keys a template-authored WP must self-declare so it

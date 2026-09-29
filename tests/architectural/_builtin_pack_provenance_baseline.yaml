@@ -168,7 +168,7 @@ missions/research/governance-profile.yaml:
 missions/research/templates/research-plan-template.md:
   repo_paths: 5
 missions/research/templates/task-prompt-template.md:
-  repo_paths: 2
+  repo_paths: 6
 missions/research/templates/tasks-template.md:
   repo_paths: 1
   provenance: 13
