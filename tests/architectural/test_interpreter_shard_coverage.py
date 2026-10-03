@@ -58,7 +58,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import pytest
 from _pytest.mark.expression import Expression
@@ -346,7 +346,27 @@ def test_every_roster_shard_paths_and_ignores_equal_the_committed_workflow() -> 
     assert not mismatches, "roster paths/ignores diverge from what ci-nightly.yml actually runs (PR-BOUNDARY-001):\n" + "\n".join(mismatches)
 
 
-def _scratch_gates_with(real_gates: list[Gate], victim: str, transform: Callable[[Gate], dict[str, object]]) -> list[Gate]:
+class _GateOverrides(TypedDict, total=False):
+    """The ``Gate`` fields a ``_scratch_gates_with`` ``transform`` may override.
+
+    One key per ``dataclasses.fields(Gate)`` entry, each carrying that field's
+    own type, so ``dataclasses.replace(g, **transform(g))`` type-checks (#5535:
+    a ``dict[str, object]`` loses the key-to-field tie and mypy can only report
+    ``object`` against every parameter). A ``Gate`` field addition is still the
+    one update site this helper promises -- now here as well as in ``Gate``."""
+
+    workflow: str
+    job: str
+    shard: str | None
+    paths: list[str]
+    ignores: list[str]
+    marker_expr: str | None
+    via: str | None
+    partition: str | None
+    runs_on: str | None
+
+
+def _scratch_gates_with(real_gates: list[Gate], victim: str, transform: Callable[[Gate], _GateOverrides]) -> list[Gate]:
     """Single shared scratch-copy helper (PR-FRESH2-002): a copy of
     ``real_gates`` with ``victim``'s Gate(s) replaced via
     ``dataclasses.replace(g, **transform(g))`` -- never a manual per-field
